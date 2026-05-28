@@ -660,8 +660,8 @@ function genStageTraps(s:number) {
 function stepStage() {
   const target=getStageTarget(stage.value);
 
-  // generate traps on stage start
-  if(traps.length===0 && stage.value>1) traps=genStageTraps(stage.value);
+  // generate traps on stage start (skip when portal is active)
+  if(traps.length===0 && stage.value>1 && !portal.value) traps=genStageTraps(stage.value);
 
   // spawn portal when score >= target
   if(score.value>=target && !portal.value){
