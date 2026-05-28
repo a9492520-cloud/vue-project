@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://lhwpeveyqguonagheybd.supabase.co";
-const SUPABASE_ANON = "sb_publishable_IUsrZBMtfpCfOA2SZ_dBHg_93EWmD9O8l8Pexl_6g8A";
+const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxod3BldmV5cWd1b25hZ2hleWJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5NzU5ODMsImV4cCI6MjA5NTU1MTk4M30.9iMXnjWLPSu-n1OFPsTcC3dtxrzZ2VJbSoX2DQErVwk";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 const SIZE = 480;
