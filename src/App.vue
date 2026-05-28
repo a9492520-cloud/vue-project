@@ -282,12 +282,14 @@ function randPos(excl:{x:number;y:number}[]=[]) {
   while(excl.some(e=>e.x===p!.x&&e.y===p!.y));
   return p;
 }
-function spawnFood() { food=randPos([...snake,...(fieldPU?[fieldPU]:[])]);  }
+function spawnFood() { food=randPos([...snake,...(fieldPU?[fieldPU]:[]),...(gameMode.value==="stage"?traps:[])]);  }
 function trySpawnPU() {
   if(fieldPU) return;
   if(gameMode.value==="stage" && portal.value) return;
   if(Math.random()<0.28) {
-    fieldPU={...randPos([...snake,food]),type:PU_TYPES[Math.floor(Math.random()*PU_TYPES.length)]!,life:22};
+    const excl = [snake,food] as any;
+    if(gameMode.value==="stage") excl.push(...traps);
+    fieldPU={...randPos([...snake,food,...(gameMode.value==="stage"?traps:[])]),type:PU_TYPES[Math.floor(Math.random()*PU_TYPES.length)]!,life:22};
   }
 }
 function burst(cx:number,cy:number,color:string,n=14) {
@@ -651,7 +653,8 @@ function genStageTraps(s:number) {
       snake.some(sn=>sn.x===p.x&&sn.y===p.y) ||
       (p.x===food.x&&p.y===food.y) ||
       t.some(tp=>tp.x===p.x&&tp.y===p.y) ||
-      (portal.value&&p.x===portal.value.x&&p.y===portal.value.y)
+      (portal.value&&p.x===portal.value.x&&p.y===portal.value.y) ||
+      (fieldPU&&p.x===fieldPU.x&&p.y===fieldPU.y)
     ));
     t.push(p);
   }
