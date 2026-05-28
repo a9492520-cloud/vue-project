@@ -1,6 +1,10 @@
-直接在常用應用程式中試用 AI 功能 … 使用 Gemini 生成草稿及潤飾內容，並體驗採用 Google 新一代 AI 技術的 Gemini Pro
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = "https://lhwpeveyqguonagheybd.supabase.co";
+const SUPABASE_ANON = "sb_publishable_IUsrZBMtfpCfOA2SZ_dBHg_93EWmD9O8l8Pexl_6g8A";
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 const SIZE = 480;
 const GRID = 20;
@@ -148,8 +152,8 @@ let missiles: MissileData[] = [];
 const BOSS_THRESHOLD = 15;
 const bossKills = ref(0);
 
-// ── per-mode leaderboard & history (localStorage) ─────────
-type LBEntry = {name:string;score:number};
+// ── per-mode leaderboard (Supabase) & history (localStorage) ─
+type LBEntry = {name:string;score:number;created_at?:string};
 type Frame = {snake:{x:number;y:number}[];food:{x:number;y:number};fieldPU:{x:number;y:number;type:PUType;life:number}|null;activePUs:ActivePU[];score:number;bossData:BossData|null;missiles:MissileData[];portal?:{x:number;y:number}|null;traps?:{x:number;y:number}[];stage?:number;};
 type HistoryItem = {label:string;score:number;frames:Frame[];mode?:string};
 const leaderboard = ref<LBEntry[]>([]);
@@ -157,18 +161,23 @@ const history = ref<HistoryItem[]>([]);
 let frames:Frame[] = [];
 let replayTimer:ReturnType<typeof setTimeout>|null = null;
 
-function loadLB(mode:string) {
+async function loadLB(mode:string) {
+  leaderboard.value = [];
   try {
-    const raw = localStorage.getItem(`ns-lb-${mode}`);
-    leaderboard.value = raw ? JSON.parse(raw) : [];
-  } catch { leaderboard.value = []; }
+    const { data, error } = await sb
+      .from("leaderboard")
+      .select("name,score")
+      .eq("mode", mode)
+      .order("score", { ascending: false })
+      .limit(10);
+    if(!error && data) leaderboard.value = data;
+  } catch { /* ignore */ }
 }
-function addLB(mode:string, name:string, s:number) {
-  loadLB(mode);
-  leaderboard.value.push({name, score: s});
-  leaderboard.value.sort((a,b) => b.score - a.score);
-  leaderboard.value = leaderboard.value.slice(0, 10);
-  try { localStorage.setItem(`ns-lb-${mode}`, JSON.stringify(leaderboard.value)); } catch (e) { console.warn('LB save fail', e); }
+async function addLB(mode:string, name:string, s:number) {
+  try {
+    await sb.from("leaderboard").insert({ name, score: s, mode });
+  } catch { /* ignore */ }
+  await loadLB(mode);
 }
 function loadHist(mode:string) {
   try {
@@ -179,9 +188,9 @@ function loadHist(mode:string) {
 function saveHist(mode:string) {
   try { localStorage.setItem(`ns-hist-${mode}`, JSON.stringify(history.value)); } catch {}
 }
-function selectMode(mode:"main"|"normal"|"tron"|"boss"|"stage"|"shop") {
+async function selectMode(mode:"main"|"normal"|"tron"|"boss"|"stage"|"shop") {
   selectedMode.value = mode;
-  if(mode!=="main"){ loadLB(mode); loadHist(mode); }
+  if(mode!=="main"){ await loadLB(mode); loadHist(mode); }
 }
 
 function recordFrame() {
@@ -1230,7 +1239,7 @@ function gameOver() {
 
   if(mode==="stage") finalScore=stage.value;
 
-  if(mode!=="tron") addLB(mode,name||"匿名",finalScore);
+  if(mode!=="tron") addLB(mode,name||"匿名",finalScore).then(()=>{});
   loadHist(mode);
   history.value.unshift({label:name||"匿名",score:finalScore,frames:JSON.parse(JSON.stringify(frames)),mode});
   history.value=history.value.slice(0,10);
