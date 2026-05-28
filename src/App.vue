@@ -1,10 +1,22 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
-import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://lhwpeveyqguonagheybd.supabase.co";
 const SUPABASE_ANON = "sb_publishable_IUsrZBMtfpCfOA2SZ_dBHg_93EWmD9O8l8Pexl_6g8A";
-const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+async function sbFetch(path:string, opts:RequestInit={}) {
+  const res = await fetch(SUPABASE_URL + "/rest/v1/" + path, {
+    ...opts,
+    headers: {
+      "apikey": SUPABASE_ANON,
+      "Authorization": "Bearer " + SUPABASE_ANON,
+      "Content-Type": "application/json",
+      ...(opts.headers||{}),
+    },
+  });
+  if(!res.ok) throw new Error("Supabase " + res.status);
+  return res;
+}
 
 const SIZE = 480;
 const GRID = 20;
@@ -164,18 +176,18 @@ let replayTimer:ReturnType<typeof setTimeout>|null = null;
 async function loadLB(mode:string) {
   leaderboard.value = [];
   try {
-    const { data, error } = await sb
-      .from("leaderboard")
-      .select("name,score")
-      .eq("mode", mode)
-      .order("score", { ascending: false })
-      .limit(10);
-    if(!error && data) leaderboard.value = data;
+    const q = `select=name,score&mode=eq.${mode}&order=score.desc&limit=10`;
+    const res = await sbFetch(q);
+    const data:LBEntry[] = await res.json();
+    if(data) leaderboard.value = data;
   } catch { /* ignore */ }
 }
 async function addLB(mode:string, name:string, s:number) {
   try {
-    await sb.from("leaderboard").insert({ name, score: s, mode });
+    await sbFetch("leaderboard", {
+      method: "POST",
+      body: JSON.stringify({ name, score: s, mode }),
+    });
   } catch { /* ignore */ }
   await loadLB(mode);
 }
