@@ -1011,7 +1011,7 @@ function stepDuel() {
   trySpawnDuelPU(2);
 }
 
-// ── Duel AI（生存優先制：A* + 吃食物預測 + 追尾 + Flood Fill）──
+// ── Duel AI（四層防禦：嚴格碰撞 + 虛擬蛇預判 + 追尾 + Flood Fill）──
 function duelAI() {
   const head=snake2[0]!;
   const tail=snake2[snake2.length-1]!;
@@ -1029,34 +1029,39 @@ function duelAI() {
   const oppPortal=inOpp?portal1:null;
   const hasSkill=heldSkill2!==null;
 
-  // ── 障礙物集合 ──
-  const obstacles=new Set<string>();
-  for(const s of snake2)obstacles.add(`${s.x},${s.y}`);
-  if(sameGrid)for(const s of snake)obstacles.add(`${s.x},${s.y}`);
-  for(const t of myTraps)obstacles.add(`${t.x},${t.y}`);
-
   // ── 技能使用 ──
   if(hasSkill&&heldSkill2==="trap"&&!inOpp){activateDuelSkill(2);}
   if(hasSkill&&heldSkill2==="remove-trap"&&traps2.length>0){activateDuelSkill(2);}
   if(hasSkill&&heldSkill2==="shield"){
-    let space=0;for(const d of ALL){let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;if(nx>=0&&ny>=0&&nx<GRID&&ny<GRID&&!obstacles.has(`${nx},${ny}`))space++;}
+    let space=0;for(const d of ALL){let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;if(nx>=0&&ny>=0&&nx<GRID&&ny<GRID)space++;}
     if(space<2)activateDuelSkill(2);
   }
   if(hasSkill&&heldSkill2==="ghost"){
-    let space=0;for(const d of ALL){let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;if(nx>=0&&ny>=0&&nx<GRID&&ny<GRID&&!obstacles.has(`${nx},${ny}`))space++;}
+    let space=0;for(const d of ALL){let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;if(nx>=0&&ny>=0&&nx<GRID&&ny<GRID)space++;}
     if(space<1)activateDuelSkill(2);
   }
   if(hasSkill&&heldSkill2==="double"){activateDuelSkill(2);}
   if(hasSkill&&heldSkill2==="shrink"&&snake2.length>8){activateDuelSkill(2);}
   if(hasSkill&&heldSkill2==="slow"&&sameGrid){activateDuelSkill(2);}
 
-  // ── A* 尋路（回傳第一個方向 + 路徑長度）──
-  function aStar(sx:number,sy:number,tx:number,ty:number,customObs?:Set<string>):{dir:"UP"|"DOWN"|"LEFT"|"RIGHT";pathLen:number}|null{
+  // ── 障礙物工廠 ──
+  function buildObs(includeTail:boolean):Set<string>{
+    const s=new Set<string>();
+    for(const seg of snake2)s.add(`${seg.x},${seg.y}`);
+    if(sameGrid)for(const seg of snake)s.add(`${seg.x},${seg.y}`);
+    for(const t of myTraps)s.add(`${t.x},${t.y}`);
+    if(!includeTail)s.delete(`${tail.x},${tail.y}`);
+    return s;
+  }
+
+  // ── A*（目標永遠可進入；obs 不可為空）──
+  function aStar(sx:number,sy:number,tx:number,ty:number,obs:Set<string>):{dir:"UP"|"DOWN"|"LEFT"|"RIGHT";pathLen:number}|null{
+    const obs2=new Set(obs);
+    obs2.delete(`${tx},${ty}`); // 目標永遠可以站
+    obs2.add(`${sx},${sy}`);
     const h=(x:number,y:number)=>Math.abs(x-tx)+Math.abs(y-ty);
     const open:{x:number;y:number;g:number;f:number;dir:"UP"|"DOWN"|"LEFT"|"RIGHT"|null}[]=[];
     const closed=new Set<string>();
-    const obs=new Set(customObs??obstacles);
-    obs.add(`${sx},${sy}`);
     open.push({x:sx,y:sy,g:0,f:h(sx,sy),dir:null});
     while(open.length){
       let bi=0;for(let i=1;i<open.length;i++)if(open[i]!.f<open[bi]!.f)bi=i;
@@ -1071,7 +1076,7 @@ function duelAI() {
         if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
         else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
         const nk=`${nx},${ny}`;
-        if(closed.has(nk)||obs.has(nk))continue;
+        if(closed.has(nk)||obs2.has(nk))continue;
         if(!ghost&&myTraps.some(t=>t.x===nx&&t.y===ny))continue;
         const ng=cur.g+1;
         const ex=open.find(o=>o.x===nx&&o.y===ny);
@@ -1083,8 +1088,8 @@ function duelAI() {
   }
 
   // ── Flood Fill ──
-  function floodFill(sx:number,sy:number,customObs?:Set<string>):number{
-    const vis=new Set(customObs??obstacles);
+  function floodFill(sx:number,sy:number,obs:Set<string>):number{
+    const vis=new Set(obs);
     vis.add(`${sx},${sy}`);
     const q:[number,number][]=[[sx,sy]];
     let cnt=0;
@@ -1102,135 +1107,104 @@ function duelAI() {
     return cnt;
   }
 
-  // ── 輔助：建立排除尾巴的障礙物（追尾用） ──
-  function obsWithoutTail():Set<string>{
-    const s=new Set(obstacles);
-    s.delete(`${tail.x},${tail.y}`);
-    return s;
-  }
-
-  // ── 輔助：模擬吃完食物後的身體障礙物 ──
-  function obsAfterEating(foodX:number,foodY:number,pathLen:number):Set<string>{
+  // ── 虛擬蛇：吃完食物後的身體障礙 ──
+  function afterFoodObs(fx:number,fy:number,pathLen:number):Set<string>{
     const nonEat=Math.min(pathLen-1,snake2.length-1);
-    // 吃完後的剩餘身體 = 原始身體去掉最後 nonEat 節
-    const remain=snake2.slice(0,snake2.length-nonEat);
+    const keep=snake2.length-nonEat;
     const s=new Set<string>();
-    // 除了食物位置（新蛇頭）之外，其他都是障礙
-    for(let i=0;i<remain.length;i++){
-      const seg=remain[i]!;
-      if(seg.x===foodX&&seg.y===foodY)continue;
+    for(let i=0;i<keep;i++){
+      const seg=snake2[i]!;
+      if(seg.x===fx&&seg.y===fy)continue;
       s.add(`${seg.x},${seg.y}`);
     }
     return s;
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 策略 1：吃食物（附帶未來預測 — 吃完後能否找到尾巴）
+  // 對每個安全方向評分，選最高分
   // ═══════════════════════════════════════════════════════════
-  let chosen:"UP"|"DOWN"|"LEFT"|"RIGHT"|null=null;
+  let bestDir:"UP"|"DOWN"|"LEFT"|"RIGHT"|null=null;
+  let bestScore=-Infinity;
 
-  if(myFood&&!(inOpp&&myFood.x===-1)){
-    const foodResult=aStar(head.x,head.y,myFood.x,myFood.y);
-    if(foodResult){
-      // 模擬吃完食物後的狀況
-      const afterObs=obsAfterEating(myFood.x,myFood.y,foodResult.pathLen);
-      // 吃完後的新尾巴位置 = 原始身體索引 [length-1-nonEat]
-      const nonEat=Math.min(foodResult.pathLen-1,snake2.length-1);
-      const newTail=snake2[snake2.length-1-nonEat]!;
-      // 從食物位置到新尾巴是否可達？
-      const canReachTail=aStar(myFood.x,myFood.y,newTail.x,newTail.y,afterObs);
-      if(canReachTail){
-        chosen=foodResult.dir;
+  for(const d of ALL){
+    if(d===OPP[dir2])continue;
+    let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;
+    if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
+    else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
+
+    // ① 嚴格碰撞檢查：吃食物時尾巴會留著，否則尾巴會移開
+    const stepEats=myFood&&!(inOpp&&myFood.x===-1)&&nx===myFood.x&&ny===myFood.y;
+    const obsSafe=buildObs(stepEats); // 吃東西 → 尾巴是障礙；不吃 → 尾巴可通行
+    if(obsSafe.has(`${nx},${ny}`))continue; // 這步就會撞死
+
+    let score=0;
+
+    // ② 基礎生存空間（最重要）
+    const space=floodFill(nx,ny,obsSafe);
+    space===0&&console.error("floodFill zero",nx,ny);
+    score+=space*100;
+
+    // ③ 吃食物虛擬預判
+    if(stepEats){
+      const foodPath=aStar(head.x,head.y,myFood.x,myFood.y,buildObs(false));
+      if(foodPath){
+        const nonEat=Math.min(foodPath.pathLen-1,snake2.length-1);
+        const newTail=snake2[snake2.length-1-nonEat]!;
+        const afterObs=afterFoodObs(myFood.x,myFood.y,foodPath.pathLen);
+        afterObs.delete(`${newTail.x},${newTail.y}`); // ★ 新尾巴可通行
+        const safe=aStar(myFood.x,myFood.y,newTail.x,newTail.y,afterObs);
+        if(safe)score+=500000; // 吃完還能追尾 → 完美
+        else score-=200000;    // 吃完會死 → 大扣分
+      }
+    }else{
+      // 從新位置能否走到食物
+      if(myFood&&!(inOpp&&myFood.x===-1)){
+        const toFood=aStar(nx,ny,myFood.x,myFood.y,buildObs(false));
+        if(toFood)score+=8000;
       }
     }
-  }
 
-  // ═══════════════════════════════════════════════════════════
-  // 策略 2：在對手場地 → 追殺玩家（追尾優先級低於在對方場的追殺）
-  // ═══════════════════════════════════════════════════════════
-  if(!chosen&&inOpp){
-    const chase=aStar(head.x,head.y,snake[0]!.x,snake[0]!.y);
-    if(chase)chosen=chase.dir;
-  }
+    // ④ 能否走到尾巴（安全性指標）
+    const toTail=aStar(nx,ny,tail.x,tail.y,buildObs(false));
+    if(toTail)score+=20000;
 
-  // ═══════════════════════════════════════════════════════════
-  // 策略 3：追尾（Tail Chasing — 最安全的生存策略）
-  // ═══════════════════════════════════════════════════════════
-  if(!chosen){
-    // 追尾時尾端不算障礙（尾會移動）
-    const tailObs=obsWithoutTail();
-    const tailResult=aStar(head.x,head.y,tail.x,tail.y,tailObs);
-    if(tailResult){
-      // 不要直接往尾巴反方向走（避免繞圈卡住）
-      if(tailResult.dir!==OPP[dir2])chosen=tailResult.dir;
+    // ⑤ 在對手場地追殺
+    if(inOpp){
+      const chase=aStar(nx,ny,snake[0]!.x,snake[0]!.y,buildObs(false));
+      if(chase)score+=10000;
     }
-  }
 
-  // ═══════════════════════════════════════════════════════════
-  // 策略 4：前往傳送門
-  // ═══════════════════════════════════════════════════════════
-  if(!chosen&&myPortal&&!inOpp){
-    const p=aStar(head.x,head.y,myPortal.x,myPortal.y);
-    if(p)chosen=p.dir;
-  }
-  if(!chosen&&oppPortal&&inOpp){
-    const p=aStar(head.x,head.y,oppPortal.x,oppPortal.y);
-    if(p)chosen=p.dir;
-  }
+    // ⑥ 傳送門
+    if(myPortal&&!inOpp){const p=aStar(nx,ny,myPortal.x,myPortal.y,buildObs(false));if(p)score+=5000;}
+    if(oppPortal&&inOpp){const p=aStar(nx,ny,oppPortal.x,oppPortal.y,buildObs(false));if(p)score+=5000;}
 
-  // ═══════════════════════════════════════════════════════════
-  // 策略 5：撿技能道具
-  // ═══════════════════════════════════════════════════════════
-  if(!chosen&&myPU&&!hasSkill&&!(inOpp&&myPU.x===-1)){
-    const p=aStar(head.x,head.y,myPU.x,myPU.y);
-    if(p)chosen=p.dir;
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  // 策略 6：如果前面全都失敗 → 追食物（最簡單的 fallback）
-  // ═══════════════════════════════════════════════════════════
-  if(!chosen&&myFood&&!(inOpp&&myFood.x===-1)){
-    const p=aStar(head.x,head.y,myFood.x,myFood.y);
-    if(p)chosen=p.dir;
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  // 策略 7：Flood Fill 生存掃描（選空間最大的方向）
-  // ═══════════════════════════════════════════════════════════
-  if(!chosen){
-    let bestSpace=-1;
-    for(const d of ALL){
-      if(d===OPP[dir2])continue;
-      let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;
-      if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
-      else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
-      if(obstacles.has(`${nx},${ny}`))continue;
-      if(!ghost&&myTraps.some(t=>t.x===nx&&t.y===ny))continue;
-      const space=floodFill(nx,ny);
-      // 蛇越長 → 越偏好走邊緣（避免中央繞死）
-      let edgeBonus=0;
-      if(snake2.length>6){
-        const nearEdge=(nx<=2||ny<=2||nx>=GRID-3||ny>=GRID-3)?1:0;
-        edgeBonus=nearEdge*snake2.length*2;
-      }
-      if(space+edgeBonus>bestSpace){bestSpace=space+edgeBonus;chosen=d;}
+    // ⑦ 撿技能
+    if(myPU&&!hasSkill&&!(inOpp&&myPU.x===-1)){
+      const p=aStar(nx,ny,myPU.x,myPU.y,buildObs(false));if(p)score+=3000;
     }
+
+    // ⑧ 長蛇邊緣偏好
+    if(snake2.length>6){
+      const nearEdge=(nx<=2||ny<=2||nx>=GRID-3||ny>=GRID-3)?1:0;
+      score+=nearEdge*snake2.length*5;
+    }
+
+    if(score>bestScore){bestScore=score;bestDir=d;}
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // 策略 8：最後防線 — 任何安全的方向
-  // ═══════════════════════════════════════════════════════════
-  if(!chosen){
+  // ── 救火隊：任何安全方向 ──
+  if(!bestDir){
+    const fallbackObs=buildObs(false);
     for(const d of ALL){
       if(d===OPP[dir2])continue;
       let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;
       if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
       if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
-      if(!obstacles.has(`${nx},${ny}`)&&!(myTraps.some(t=>t.x===nx&&t.y===ny))){chosen=d;break;}
+      if(!fallbackObs.has(`${nx},${ny}`)){bestDir=d;break;}
     }
   }
 
-  if(chosen)dir2=chosen;
+  if(bestDir)dir2=bestDir;
 }
 
 
