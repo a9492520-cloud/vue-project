@@ -496,11 +496,12 @@ function key(e:KeyboardEvent) {
   }
   if(state.value!=="playing"||paused.value) return;
 
-  // Player 1: WASD (left snake)
-  if(e.key==="w"||e.key==="W"){e.preventDefault();pushDir(dirQueue,"UP",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
-  if(e.key==="s"||e.key==="S"){e.preventDefault();pushDir(dirQueue,"DOWN",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
-  if(e.key==="a"||e.key==="A"){e.preventDefault();pushDir(dirQueue,"LEFT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
-  if(e.key==="d"||e.key==="D"){e.preventDefault();pushDir(dirQueue,"RIGHT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+  // Player 1: WASD or Arrow keys (left snake)
+  const p1Arrow = gameMode.value!=="tron"||is2PAI.value;
+  if(e.key==="w"||e.key==="W"||(p1Arrow&&e.key==="ArrowUp"))   {e.preventDefault();pushDir(dirQueue,"UP",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+  if(e.key==="s"||e.key==="S"||(p1Arrow&&e.key==="ArrowDown")) {e.preventDefault();pushDir(dirQueue,"DOWN",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+  if(e.key==="a"||e.key==="A"||(p1Arrow&&e.key==="ArrowLeft")) {e.preventDefault();pushDir(dirQueue,"LEFT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+  if(e.key==="d"||e.key==="D"||(p1Arrow&&e.key==="ArrowRight")){e.preventDefault();pushDir(dirQueue,"RIGHT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
 
   // Player 2: Arrow keys (right snake, Duel mode)
   if(gameMode.value==="tron"&&!is2PAI.value){
@@ -1135,7 +1136,7 @@ function duelAI() {
       const afterObs=obsAfterEating(myFood.x,myFood.y,foodResult.pathLen);
       // 吃完後的新尾巴位置 = 原始身體索引 [length-1-nonEat]
       const nonEat=Math.min(foodResult.pathLen-1,snake2.length-1);
-      const newTail=snake2[snake2.length-1-nonEat];
+      const newTail=snake2[snake2.length-1-nonEat]!;
       // 從食物位置到新尾巴是否可達？
       const canReachTail=aStar(myFood.x,myFood.y,newTail.x,newTail.y,afterObs);
       if(canReachTail){
