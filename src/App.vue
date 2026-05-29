@@ -496,14 +496,16 @@ function key(e:KeyboardEvent) {
   }
   if(state.value!=="playing"||paused.value) return;
 
-  // Player 1: WASD or Arrow keys (left snake)
-  const p1Arrow = gameMode.value!=="tron"||is2PAI.value;
-  if(e.key==="w"||e.key==="W"||(p1Arrow&&e.key==="ArrowUp"))   {e.preventDefault();pushDir(dirQueue,"UP",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
-  if(e.key==="s"||e.key==="S"||(p1Arrow&&e.key==="ArrowDown")) {e.preventDefault();pushDir(dirQueue,"DOWN",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
-  if(e.key==="a"||e.key==="A"||(p1Arrow&&e.key==="ArrowLeft")) {e.preventDefault();pushDir(dirQueue,"LEFT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
-  if(e.key==="d"||e.key==="D"||(p1Arrow&&e.key==="ArrowRight")){e.preventDefault();pushDir(dirQueue,"RIGHT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+  // Player 1: WASD or Arrow keys — AI 模式時鎖住
+  if(!isAI.value){
+    const p1Arrow = gameMode.value!=="tron"||is2PAI.value;
+    if(e.key==="w"||e.key==="W"||(p1Arrow&&e.key==="ArrowUp"))   {e.preventDefault();pushDir(dirQueue,"UP",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+    if(e.key==="s"||e.key==="S"||(p1Arrow&&e.key==="ArrowDown")) {e.preventDefault();pushDir(dirQueue,"DOWN",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+    if(e.key==="a"||e.key==="A"||(p1Arrow&&e.key==="ArrowLeft")) {e.preventDefault();pushDir(dirQueue,"LEFT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+    if(e.key==="d"||e.key==="D"||(p1Arrow&&e.key==="ArrowRight")){e.preventDefault();pushDir(dirQueue,"RIGHT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+  }
 
-  // Player 2: Arrow keys (right snake, Duel mode)
+  // Player 2: Arrow keys (Duel mode) — AI 模式時已鎖(!is2PAI)
   if(gameMode.value==="tron"&&!is2PAI.value){
     if(e.key==="ArrowUp")   {e.preventDefault();pushDir(dirQueue2,"UP",dirQueue2.length?dirQueue2[dirQueue2.length-1]!:dir2);}
     if(e.key==="ArrowDown") {e.preventDefault();pushDir(dirQueue2,"DOWN",dirQueue2.length?dirQueue2[dirQueue2.length-1]!:dir2);}
