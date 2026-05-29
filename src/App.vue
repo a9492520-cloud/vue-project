@@ -30,8 +30,10 @@ let ctx: CanvasRenderingContext2D|null = null;
 
 let snake: {x:number;y:number}[] = [];
 let dir: "UP"|"DOWN"|"LEFT"|"RIGHT" = "RIGHT";
+const dirQueue: ("UP"|"DOWN"|"LEFT"|"RIGHT")[] = [];
 let snake2: {x:number;y:number}[] = [];
 let dir2: "UP"|"DOWN"|"LEFT"|"RIGHT" = "LEFT";
+const dirQueue2: ("UP"|"DOWN"|"LEFT"|"RIGHT")[] = [];
 let food = {x:5,y:5};
 
 type PUType = "shield"|"ghost"|"double"|"shrink"|"slow"|"trap"|"remove-trap";
@@ -343,20 +345,17 @@ async function startGame(mode:"normal"|"tron"|"boss"|"stage", ai:boolean) {
   }
   score.value=0; frames=[]; particles=[];
   activePUs=[]; activePUs2=[]; fieldPU=null; fieldPU2=null; combo=0; level=1;
+  heldPU.value=null;
   currentStep=0; lastFoodStep=0; levelFlash=0; shakeFrames=0;
   isDying=false; comboText=null; paused.value=false;
   tronWinner.value=""; bossData=null; missiles=[]; bossKills.value=0;
   missileCooldown=0; pressedKeys.clear(); extraLifeUsed=false;
 
-  // ── 套用商店物品 ──
-  if(ownedItems.value.has("startShield") && mode!=="tron"){
-    activePUs.push({type:"shield", steps:PU_STEPS.shield, maxSteps:PU_STEPS.shield});
-  }
-  if(ownedItems.value.has("startSlow") && mode!=="tron"){
-    activePUs.push({type:"slow", steps:PU_STEPS.slow, maxSteps:PU_STEPS.slow});
-  }
-  if(ownedItems.value.has("startDouble") && mode!=="tron"){
-    activePUs.push({type:"double", steps:20, maxSteps:20});
+  // ── 套用商店物品（存入手持技能，按空白鍵施放） ──
+  if(mode!=="tron"){
+    if(ownedItems.value.has("startShield") && !heldPU.value) heldPU.value="shield";
+    if(ownedItems.value.has("startSlow") && !heldPU.value) heldPU.value="slow";
+    if(ownedItems.value.has("startDouble") && !heldPU.value) heldPU.value="double";
   }
   const extraLifeOwned = ownedItems.value.has("extraLife");
 
@@ -486,42 +485,61 @@ function aiStep() {
 }
 
 // ── input ──────────────────────────────────────────────────
+const OPPOSITE:Record<string,string>={UP:"DOWN",DOWN:"UP",LEFT:"RIGHT",RIGHT:"LEFT"};
+function pushDir(q:("UP"|"DOWN"|"LEFT"|"RIGHT")[], d:"UP"|"DOWN"|"LEFT"|"RIGHT", lastDir:"UP"|"DOWN"|"LEFT"|"RIGHT") {
+  if(d===lastDir||d===OPPOSITE[lastDir]) return;
+  if(q.length<2) q.push(d);
+}
 function key(e:KeyboardEvent) {
   if(state.value==="playing" && (e.key==="Escape"||e.key==="p"||e.key==="P")) {
     e.preventDefault(); togglePause(); return;
   }
   if(state.value!=="playing"||paused.value) return;
 
-  // Player 1: arrow keys (always active)
-  if(e.key==="ArrowUp"   &&dir!=="DOWN") {e.preventDefault();dir="UP";}
-  if(e.key==="ArrowDown" &&dir!=="UP")   {e.preventDefault();dir="DOWN";}
-  if(e.key==="ArrowLeft" &&dir!=="RIGHT"){e.preventDefault();dir="LEFT";}
-  if(e.key==="ArrowRight"&&dir!=="LEFT") {e.preventDefault();dir="RIGHT";}
+  // Player 1: WASD (left snake)
+  if(e.key==="w"||e.key==="W"){e.preventDefault();pushDir(dirQueue,"UP",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+  if(e.key==="s"||e.key==="S"){e.preventDefault();pushDir(dirQueue,"DOWN",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+  if(e.key==="a"||e.key==="A"){e.preventDefault();pushDir(dirQueue,"LEFT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
+  if(e.key==="d"||e.key==="D"){e.preventDefault();pushDir(dirQueue,"RIGHT",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
 
-  // Player 2: WASD (Duel mode)
+  // Player 2: Arrow keys (right snake, Duel mode)
   if(gameMode.value==="tron"&&!is2PAI.value){
-    if((e.key==="w"||e.key==="W")&&dir2!=="DOWN") {e.preventDefault();dir2="UP";}
-    if((e.key==="s"||e.key==="S")&&dir2!=="UP")   {e.preventDefault();dir2="DOWN";}
-    if((e.key==="a"||e.key==="A")&&dir2!=="RIGHT"){e.preventDefault();dir2="LEFT";}
-    if((e.key==="d"||e.key==="D")&&dir2!=="LEFT") {e.preventDefault();dir2="RIGHT";}
+    if(e.key==="ArrowUp")   {e.preventDefault();pushDir(dirQueue2,"UP",dirQueue2.length?dirQueue2[dirQueue2.length-1]!:dir2);}
+    if(e.key==="ArrowDown") {e.preventDefault();pushDir(dirQueue2,"DOWN",dirQueue2.length?dirQueue2[dirQueue2.length-1]!:dir2);}
+    if(e.key==="ArrowLeft") {e.preventDefault();pushDir(dirQueue2,"LEFT",dirQueue2.length?dirQueue2[dirQueue2.length-1]!:dir2);}
+    if(e.key==="ArrowRight"){e.preventDefault();pushDir(dirQueue2,"RIGHT",dirQueue2.length?dirQueue2[dirQueue2.length-1]!:dir2);}
   }
 
-  // Skill activation: SPACE for P1, 0 for P2 (Duel mode)
-  if(gameMode.value==="tron"&&state.value==="playing"){
-    if(e.key===" ") {
+  // Skill activation: SPACE
+  if(e.key===" ") {
+    if(gameMode.value==="tron"){
       e.preventDefault();
       if(heldSkill1) activateDuelSkill(1);
-    }
-    if(e.key==="0") {
+    } else if(gameMode.value==="boss"){
       e.preventDefault();
-      if(!is2PAI.value&&heldSkill2) activateDuelSkill(2);
+      pressedKeys.add(" ");
+    } else {
+      // 非對戰模式：使用商店購買的技能
+      if(heldPU.value){
+        e.preventDefault();
+        const pu=heldPU.value; heldPU.value=null;
+        // 消耗對應的商店道具
+        const shopMap:Record<string,string>={shield:"startShield",slow:"startSlow",double:"startDouble"};
+        const sid=shopMap[pu]; if(sid&&ownedItems.value.has(sid)){ownedItems.value.delete(sid);saveShop();}
+        if(pu==="shrink"){
+          snake=snake.slice(0,Math.max(1,snake.length>>1));
+        } else {
+          const ex=activePUs.find(p=>p.type===pu);
+          if(ex) ex.steps=PU_STEPS[pu];
+          else activePUs.push({type:pu,steps:PU_STEPS[pu],maxSteps:PU_STEPS[pu]});
+        }
+        burst(snake[0]!.x*CELL+CELL/2,snake[0]!.y*CELL+CELL/2,PU_COLOR[pu],22);
+      }
     }
   }
-
-  // Track SPACE for continuous fire
-  if(e.key===" "&&gameMode.value==="boss"&&state.value==="playing"){
+  if(e.key==="0") {
     e.preventDefault();
-    pressedKeys.add(" ");
+    if(gameMode.value==="tron"&&!is2PAI.value&&heldSkill2) activateDuelSkill(2);
   }
 }
 
@@ -534,6 +552,7 @@ function step() {
   if(isDying) return;
   if(gameMode.value==="tron"){ stepDuel(); return; }
   if(isAI.value) aiStep();
+  if(dirQueue.length) dir=dirQueue.shift()!;
   currentStep++;
 
   if(fieldPU){fieldPU.life--;if(fieldPU.life<=0)fieldPU=null;}
@@ -553,7 +572,15 @@ function step() {
     if(shield){
       activePUs=activePUs.filter(p=>p.type!=="shield");
       burst(snake[0]!.x*CELL+CELL/2,snake[0]!.y*CELL+CELL/2,"#60a5fa",22);
-      x=Math.max(0,Math.min(GRID-1,x)); y=Math.max(0,Math.min(GRID-1,y));
+      // 護盾反彈：方向反轉 + 往回退一格
+      const oppR:Record<string,"UP"|"DOWN"|"LEFT"|"RIGHT">={UP:"DOWN",DOWN:"UP",LEFT:"RIGHT",RIGHT:"LEFT"};
+      dir=oppR[dir]!;
+      dirQueue.length=0;
+      x=snake[0]!.x; y=snake[0]!.y;
+      if(dir==="UP")y--;if(dir==="DOWN")y++;if(dir==="LEFT")x--;if(dir==="RIGHT")x++;
+      snake.unshift({x,y});
+      if(snake.length>1) snake.pop();
+      return;
     } else { triggerDeath(); return; }
   }
 
@@ -783,6 +810,9 @@ function duelRespawn(p:1|2) {
 // ── Duel step (雙人對戰) ─────────────────────────────────
 function stepDuel() {
   if(is2PAI.value) duelAI();
+  // consume direction queue
+  if(dirQueue.length) dir=dirQueue.shift()!;
+  if(dirQueue2.length) dir2=dirQueue2.shift()!;
   const dv:Record<string,{x:number;y:number}>={UP:{x:0,y:-1},DOWN:{x:0,y:1},LEFT:{x:-1,y:0},RIGHT:{x:1,y:0}};
 
   // ── Decay timers ──
@@ -803,6 +833,7 @@ function stepDuel() {
 
   // ── Collision ──
   let dead1=false, dead2=false;
+  let shieldBlocked1=false, shieldBlocked2=false;
 
   function checkWall(nx:number,ny:number,ghost:boolean):boolean{
     if(ghost) return false;
@@ -816,10 +847,10 @@ function stepDuel() {
 
   // wall
   if(!dead1&&checkWall(nx1,ny1,ghost1)){
-    if(!consumeShield(1)) dead1=true;
+    if(!consumeShield(1)) dead1=true; else shieldBlocked1=true;
   }
   if(!dead2&&checkWall(nx2,ny2,ghost2)){
-    if(!consumeShield(2)) dead2=true;
+    if(!consumeShield(2)) dead2=true; else shieldBlocked2=true;
   }
 
   // self collision
@@ -886,8 +917,24 @@ function stepDuel() {
   }
 
   // ── Move snakes ──
-  snake.unshift({x:nx1,y:ny1});
-  snake2.unshift({x:nx2,y:ny2});
+  if(shieldBlocked1){
+    const oppR:Record<string,"UP"|"DOWN"|"LEFT"|"RIGHT">={UP:"DOWN",DOWN:"UP",LEFT:"RIGHT",RIGHT:"LEFT"};
+    dir=oppR[dir]!; dirQueue.length=0;
+    const bx=h1.x-(nx1<0?1:nx1>=GRID?-1:0);
+    const by=h1.y-(ny1<0?1:ny1>=GRID?-1:0);
+    snake.unshift({x:bx>=0&&bx<GRID?bx:h1.x,y:by>=0&&by<GRID?by:h1.y});
+  } else {
+    snake.unshift({x:nx1,y:ny1});
+  }
+  if(shieldBlocked2){
+    const oppR2:Record<string,"UP"|"DOWN"|"LEFT"|"RIGHT">={UP:"DOWN",DOWN:"UP",LEFT:"RIGHT",RIGHT:"LEFT"};
+    dir2=oppR2[dir2]!; dirQueue2.length=0;
+    const bx=h2.x-(nx2<0?1:nx2>=GRID?-1:0);
+    const by=h2.y-(ny2<0?1:ny2>=GRID?-1:0);
+    snake2.unshift({x:bx>=0&&bx<GRID?bx:h2.x,y:by>=0&&by<GRID?by:h2.y});
+  } else {
+    snake2.unshift({x:nx2,y:ny2});
+  }
 
   // ── Food ──
   const myFood1=g1===1?food:food2;
@@ -897,8 +944,8 @@ function stepDuel() {
 
   if(eat1){score1++;burst((g1===1?0:DUEL_GW)+nx1*DUEL_CW+DUEL_CW/2,ny1*DUEL_CH+DUEL_CH/2,"#ff4060",10);spawnDuelFood(g1);}
   if(eat2){score2++;burst((g2===1?0:DUEL_GW)+nx2*DUEL_CW+DUEL_CW/2,ny2*DUEL_CH+DUEL_CH/2,"#c084fc",10);spawnDuelFood(g2);}
-  if(!eat1) snake.pop();
-  if(!eat2) snake2.pop();
+  if(!eat1&&!shieldBlocked1) snake.pop();
+  if(!eat2&&!shieldBlocked2) snake2.pop();
 
   // ── Collect PU ──
   const puHere1=g1===1?fieldPU:fieldPU2;
@@ -963,163 +1010,174 @@ function stepDuel() {
   trySpawnDuelPU(2);
 }
 
-// ── Duel AI ───────────────────────────────────────────────
+// ── Duel AI（超強 A* + Flood Fill 逃生）──────────────────
 function duelAI() {
-  const head=snake2[0]!;
-  const target=snake[0]!;
+  const head = snake2[0]!;
   const dv:Record<string,{x:number;y:number}>={UP:{x:0,y:-1},DOWN:{x:0,y:1},LEFT:{x:-1,y:0},RIGHT:{x:1,y:0}};
   const OPP:Record<string,string>={UP:"DOWN",DOWN:"UP",LEFT:"RIGHT",RIGHT:"LEFT"};
   const ALL:("UP"|"DOWN"|"LEFT"|"RIGHT")[]=["UP","DOWN","LEFT","RIGHT"];
 
-  const inOpp=inOpponentGrid2;
-  const myTraps=inOpp?traps1:traps2;
-  const myPortal=inOpp?null:portal2; // portal in own grid
-  const oppPortal=inOpp?portal1:null; // portal in opponent grid
-  const myFood=inOpp?food:food2;
-  const ghost=activePUs2.some(p=>p.type==="ghost");
-  const hasSkill=heldSkill2!==null;
+  const inOpp = inOpponentGrid2;
+  const ghost = activePUs2.some(p=>p.type==="ghost");
+  const sameGrid = getCurrentGrid(1)===getCurrentGrid(2);
+  const myTraps = inOpp ? traps1 : traps2;
+  const myFood = inOpp ? food : food2;
+  const myPU = inOpp ? fieldPU : fieldPU2;
+  const myPortal = inOpp ? null : portal2;
+  const oppPortal = inOpp ? portal1 : null;
+  const hasSkill = heldSkill2 !== null;
 
-  // occupied cells in current grid
-  const sameGrid=getCurrentGrid(1)===getCurrentGrid(2);
-  const occ2=new Set<string>();
-  for(const s of snake2) occ2.add(`${s.x},${s.y}`);
-  if(sameGrid) for(const s of snake) occ2.add(`${s.x},${s.y}`);
-  for(const t of myTraps) occ2.add(`${t.x},${t.y}`);
+  // ── 障礙物集合（自己的身體、對手身體、陷阱）──
+  const obstacles = new Set<string>();
+  for (const s of snake2) obstacles.add(`${s.x},${s.y}`);
+  if (sameGrid) for (const s of snake) obstacles.add(`${s.x},${s.y}`);
+  for (const t of myTraps) obstacles.add(`${t.x},${t.y}`);
 
-  function safeMove(nx:number,ny:number):boolean{
-    if(!ghost&&(nx<0||ny<0||nx>=GRID||ny>=GRID)) return false;
-    if(occ2.has(`${nx},${ny}`)) return false;
-    if(!ghost&&myTraps.some(t=>t.x===nx&&t.y===ny)) return false;
-    return true;
+  // ── 技能使用 ──────────────────────────────────
+  // 陷阱：不在對方場地時就放
+  if (hasSkill && heldSkill2==="trap" && !inOpp) { activateDuelSkill(2); }
+  // 清除陷阱：自己場上有陷阱就 auto 清
+  if (hasSkill && heldSkill2==="remove-trap" && traps2.length>0) { activateDuelSkill(2); }
+  // 護盾：空間快沒了就用
+  if (hasSkill && heldSkill2==="shield") {
+    let space = 0; for(const d of ALL){let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;if(nx>=0&&ny>=0&&nx<GRID&&ny<GRID&&!obstacles.has(`${nx},${ny}`))space++;}
+    if(space<2) activateDuelSkill(2);
   }
+  // 鬼魂：空間太少時
+  if (hasSkill && heldSkill2==="ghost") {
+    let space = 0; for(const d of ALL){let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;if(nx>=0&&ny>=0&&nx<GRID&&ny<GRID&&!obstacles.has(`${nx},${ny}`))space++;}
+    if(space<1) activateDuelSkill(2);
+  }
+  // 倍數：安全時用
+  if (hasSkill && heldSkill2==="double") { activateDuelSkill(2); }
+  // 縮短：蛇太長時
+  if (hasSkill && heldSkill2==="shrink" && snake2.length>8) { activateDuelSkill(2); }
+  // 緩速：同場地時
+  if (hasSkill && heldSkill2==="slow" && sameGrid) { activateDuelSkill(2); }
 
-  function bfs(targetX:number,targetY:number):"UP"|"DOWN"|"LEFT"|"RIGHT"|null{
-    const vis=new Set<string>(occ2);
-    vis.add(`${head.x},${head.y}`);
-    const q:{x:number;y:number;d:"UP"|"DOWN"|"LEFT"|"RIGHT"|null}[]=[{...head,d:null}];
-    while(q.length){
-      const c=q.shift()!;
-      if(c.x===targetX&&c.y===targetY) return c.d;
+  // ── A* 尋路（從指定起點到目標，回傳第一個方向）──
+  function aStar(sx:number,sy:number,tx:number,ty:number):string|null{
+    const h=(x:number,y:number)=>Math.abs(x-tx)+Math.abs(y-ty);
+    const open:{x:number;y:number;g:number;f:number;dir:string|null}[]=[];
+    const closed=new Set<string>();
+    const obs=new Set(obstacles);
+    obs.add(`${sx},${sy}`);
+    open.push({x:sx,y:sy,g:0,f:h(sx,sy),dir:null});
+    while(open.length){
+      let bi=0; for(let i=1;i<open.length;i++) if(open[i]!.f<open[bi]!.f) bi=i;
+      const cur=open.splice(bi,1)[0]!;
+      const ck=`${cur.x},${cur.y}`;
+      if(cur.x===tx&&cur.y===ty) return cur.dir;
+      if(closed.has(ck)) continue;
+      closed.add(ck);
       for(const d of ALL){
         if(d===OPP[dir2]) continue;
-        let nx=c.x+dv[d]!.x,ny=c.y+dv[d]!.y;
+        let nx=cur.x+dv[d]!.x,ny=cur.y+dv[d]!.y;
         if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
         else if(nx<0||ny<0||nx>=GRID||ny>=GRID) continue;
-        const k=`${nx},${ny}`;
-        if(vis.has(k)) continue;
-        vis.add(k);
-        q.push({x:nx,y:ny,d:c.d??d});
+        const nk=`${nx},${ny}`;
+        if(closed.has(nk)||obs.has(nk)) continue;
+        if(!ghost&&myTraps.some(t=>t.x===nx&&t.y===ny)) continue;
+        const ng=cur.g+1;
+        const ex=open.find(o=>o.x===nx&&o.y===ny);
+        if(ex){if(ng<ex.g){ex.g=ng;ex.f=ng+h(nx,ny);}}
+        else open.push({x:nx,y:ny,g:ng,f:ng+h(nx,ny),dir:cur.dir??d});
       }
     }
     return null;
   }
 
-  // flood fill for survival check
-  function floodSize(sx:number,sy:number):number{
-    const vis=new Set<string>(occ2);
+  // ── Flood Fill（計算可連通空間大小）──
+  function floodFill(sx:number,sy:number):number{
+    const vis=new Set(obstacles);
     vis.add(`${sx},${sy}`);
-    const q:[number,number][]=[[sx,sy]];let cnt=0;
+    const q:[number,number][]=[[sx,sy]];
+    let cnt=0;
     while(q.length){
-      const [x,y]=q.shift()!;cnt++;
+      const [x,y]=q.shift()!; cnt++;
       for(const d of ALL){
         let nx=x+dv[d]!.x,ny=y+dv[d]!.y;
         if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
         else if(nx<0||ny<0||nx>=GRID||ny>=GRID) continue;
-        const k=`${nx},${ny}`;
-        if(vis.has(k)) continue;vis.add(k);q.push([nx,ny]);
+        const nk=`${nx},${ny}`;
+        if(vis.has(nk)) continue;
+        vis.add(nk); q.push([nx,ny]);
       }
-    }return cnt;
-  }
-
-  // ── Skill usage ──
-  // Use trap: place on opponent's grid (only when not in opponent grid)
-  if(hasSkill&&heldSkill2==="trap"&&!inOpp){
-    activateDuelSkill(2);
-  }
-  // Use shield if about to be trapped
-  if(hasSkill&&heldSkill2==="shield"&&floodSize(head.x,head.y)<8){
-    activateDuelSkill(2);
-  }
-  // Use ghost if no space
-  if(hasSkill&&heldSkill2==="ghost"&&floodSize(head.x,head.y)<6){
-    activateDuelSkill(2);
-  }
-  // Use double when safe (flood space large)
-  if(hasSkill&&heldSkill2==="double"&&floodSize(head.x,head.y)>15){
-    activateDuelSkill(2);
-  }
-  // Use shrink if very long
-  if(hasSkill&&heldSkill2==="shrink"&&snake2.length>10){
-    activateDuelSkill(2);
-  }
-  // Use slow when opponent is in same grid
-  if(hasSkill&&heldSkill2==="slow"&&getCurrentGrid(1)===getCurrentGrid(2)){
-    activateDuelSkill(2);
-  }
-  // Use remove-trap when home grid has traps
-  if(hasSkill&&heldSkill2==="remove-trap"&&traps2.length>0){
-    activateDuelSkill(2);
-  }
-
-  // ── Strategy selection ──
-  let chosen:"UP"|"DOWN"|"LEFT"|"RIGHT"|null=null;
-
-  // Priority 1: If in opponent's grid, hunt player
-  if(inOpp){
-    const d=bfs(target.x,target.y);
-    if(d&&d!==OPP[dir2]){chosen=d;}
-  }
-
-  // Priority 2: Enter portal to hunt
-  if(!chosen&&myPortal&&!inOpp){
-    const d=bfs(myPortal.x,myPortal.y);
-    if(d&&d!==OPP[dir2]){chosen=d;}
-  }
-
-  // Priority 3: Collect power-up
-  if(!chosen){
-    const myPU=inOpp?fieldPU:fieldPU2;
-    if(myPU&&!hasSkill){
-      const d=bfs(myPU.x,myPU.y);
-      if(d&&d!==OPP[dir2]){chosen=d;}
     }
+    return cnt;
   }
 
-  // Priority 4: Eat food
-  if(!chosen){
-    const d=bfs(myFood.x,myFood.y);
-    if(d&&d!==OPP[dir2]){chosen=d;}
+  // ── 對每個方向評分 ────────────────────────────
+  let bestDir:"UP"|"DOWN"|"LEFT"|"RIGHT"|null=null;
+  let bestScore=-Infinity;
+
+  for(const d of ALL){
+    if(d===OPP[dir2]) continue;
+    let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;
+    if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
+    // 致命方向跳過
+    if(!ghost&&(nx<0||ny<0||nx>=GRID||ny>=GRID)) continue;
+    if(obstacles.has(`${nx},${ny}`)) continue;
+    if(!ghost&&myTraps.some(t=>t.x===nx&&t.y===ny)) continue;
+
+    let score=0;
+
+    // ① 生存空間（最重要）
+    const space=floodFill(nx,ny);
+    score+=space*100;
+
+    // ② 如果這個方向是 A* 指向食物的方向
+    if(myFood&&!(inOpp&&myFood.x===-1)){
+      const foodDir=aStar(head.x,head.y,myFood.x,myFood.y);
+      if(foodDir===d) score+=8000; // 正確方向
+    }
+
+    // ③ 從新位置能否走到食物
+    if(myFood&&!(inOpp&&myFood.x===-1)){
+      const canReach=aStar(nx,ny,myFood.x,myFood.y);
+      if(canReach!==null) score+=4000;
+    }
+
+    // ④ 在對手場地 → 追殺玩家
+    if(inOpp){
+      const chaseDir=aStar(head.x,head.y,snake[0]!.x,snake[0]!.y);
+      if(chaseDir===d) score+=6000;
+      const canChase=aStar(nx,ny,snake[0]!.x,snake[0]!.y);
+      if(canChase!==null) score+=3000;
+    }
+
+    // ⑤ 收集技能道具（還沒有技能時）
+    if(myPU&&!hasSkill&&!(inOpp&&myPU.x===-1)){
+      const puDir=aStar(head.x,head.y,myPU.x,myPU.y);
+      if(puDir===d) score+=2000;
+    }
+
+    // ⑥ 前往傳送門
+    if(myPortal&&!inOpp){
+      const portDir=aStar(head.x,head.y,myPortal.x,myPortal.y);
+      if(portDir===d) score+=1000;
+    }
+    // 在對手場地 → 從對方傳送門回來
+    if(oppPortal&&inOpp){
+      const retDir=aStar(head.x,head.y,oppPortal.x,oppPortal.y);
+      if(retDir===d) score+=1500;
+    }
+
+    if(score>bestScore){bestScore=score;bestDir=d;}
   }
 
-  // Priority 5: Return through portal if trapped in opponent grid
-  if(!chosen&&inOpp&&oppPortal){
-    const d=bfs(oppPortal.x,oppPortal.y);
-    if(d&&d!==OPP[dir2]){chosen=d;}
-  }
-
-  // Priority 6: Survival - move to open space
-  if(!chosen){
-    let bestSpace=-1;
+  // ── 最後防線：任何安全的方向 ──
+  if(!bestDir){
     for(const d of ALL){
       if(d===OPP[dir2]) continue;
-      const nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;
-      if(!safeMove(nx,ny)) continue;
-      const space=floodSize(nx,ny);
-      if(space>bestSpace){bestSpace=space;chosen=d;}
+      let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;
+      if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
+      if(nx<0||ny<0||nx>=GRID||ny>=GRID) continue;
+      if(!obstacles.has(`${nx},${ny}`)&&!(myTraps.some(t=>t.x===nx&&t.y===ny))){bestDir=d;break;}
     }
   }
 
-  // Priority 7: Any safe move
-  if(!chosen){
-    for(const d of ALL){
-      if(d===OPP[dir2]) continue;
-      const nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;
-      if(!safeMove(nx,ny)) continue;
-      chosen=d;break;
-    }
-  }
-
-  if(chosen) dir2=chosen;
+  if(bestDir) dir2=bestDir;
 }
 
 
@@ -1214,9 +1272,30 @@ function stepBoss() {
   }
 }
 
+const heldPU = ref<PUType|null>(null);
+const showRevivePrompt = ref(false);
+
 function triggerDeath() {
   isDying=true; shakeFrames=24;
   snake.forEach(s=>burst(s.x*CELL+CELL/2,s.y*CELL+CELL/2,"#ff4060",5));
+  // check extra life before game over
+  if(!extraLifeUsed && ownedItems.value.has("extraLife") && gameMode.value!=="tron"){
+    showRevivePrompt.value=true;
+    return;
+  }
+  setTimeout(gameOver,700);
+}
+function reviveYes() {
+  showRevivePrompt.value=false;
+  extraLifeUsed=true;
+  ownedItems.value.delete("extraLife"); saveShop();
+  isDying=false; shakeFrames=0;
+  const h=snake[0]!;
+  snake=[{x:h.x,y:h.y},{x:Math.max(0,h.x-1),y:h.y},{x:Math.max(0,h.x-2),y:h.y}];
+  comboText={text:`❤️ 復活！`,x:SIZE/2,y:SIZE/3,life:60};
+}
+function reviveNo() {
+  showRevivePrompt.value=false;
   setTimeout(gameOver,700);
 }
 
@@ -1224,18 +1303,6 @@ function gameOver() {
   const mode=gameMode.value;
   let name=isAI.value?"🤖 AI":playerName.value.trim();
   let finalScore=score.value;
-
-  // extra life revive
-  if(!extraLifeUsed && ownedItems.value.has("extraLife") && mode!=="tron"){
-    extraLifeUsed=true;
-    isDying=false;
-    shakeFrames=0;
-    // respawn snake with 3 segments
-    const h=snake[0]!;
-    snake=[{x:h.x,y:h.y},{x:Math.max(0,h.x-1),y:h.y},{x:Math.max(0,h.x-2),y:h.y}];
-    comboText={text:`❤️ 復活！`,x:SIZE/2,y:SIZE/3,life:60};
-    return;
-  }
 
   if(mode==="tron"){
     name=tronWinner.value||"";
@@ -1323,13 +1390,18 @@ function draw() {
   if(gameMode.value==="tron"){
     drawDuel();
   } else {
-    // single-player grid
-    ctx.strokeStyle="rgba(0,200,120,.04)";
-    ctx.lineWidth=.5;
+    // single-player grid（加粗邊界格線）
+    ctx.strokeStyle="rgba(0,255,170,.12)";
+    ctx.lineWidth=1;
     for(let i=0;i<=GRID;i++){
       ctx.beginPath();ctx.moveTo(i*CELL,0);ctx.lineTo(i*CELL,SIZE);ctx.stroke();
       ctx.beginPath();ctx.moveTo(0,i*CELL);ctx.lineTo(SIZE,i*CELL);ctx.stroke();
     }
+    // strong border glow（邊界加亮）
+    ctx.shadowBlur=35; ctx.shadowColor="#00ffaa";
+    ctx.strokeStyle="rgba(0,255,170,.6)"; ctx.lineWidth=4;
+    ctx.strokeRect(0,0,SIZE,SIZE);
+    ctx.shadowBlur=0;
     drawFood();
     if(fieldPU) drawPowerUpItem(fieldPU);
     drawSnake();
@@ -1465,18 +1537,22 @@ function drawDuelGrid(g:1|2, ox:number, oy:number){
   const myPortal=isG1?portal1:portal2;
   const myPU=isG1?fieldPU:fieldPU2;
 
-  // grid background
-  c.strokeStyle="rgba(0,200,120,.04)";
-  c.lineWidth=.5;
+  // grid background（加粗格線）
+  c.strokeStyle=isG1?"rgba(0,255,170,.12)":"rgba(192,132,252,.12)";
+  c.lineWidth=1;
   for(let i=0;i<=GRID;i++){
     c.beginPath();c.moveTo(ox+i*DUEL_CW,oy);c.lineTo(ox+i*DUEL_CW,oy+DUEL_GH);c.stroke();
     c.beginPath();c.moveTo(ox,oy+i*DUEL_CH);c.lineTo(ox+DUEL_GW,oy+i*DUEL_CH);c.stroke();
   }
 
-  // grid border glow
-  c.strokeStyle=isG1?"rgba(0,255,170,.15)":"rgba(192,132,252,.15)";
-  c.lineWidth=2;
+  // grid border glow（加亮）
+  c.save();
+  c.shadowBlur=30;
+  c.shadowColor=isG1?"#00ffaa":"#c084fc";
+  c.strokeStyle=isG1?"rgba(0,255,170,.6)":"rgba(192,132,252,.6)";
+  c.lineWidth=4;
   c.strokeRect(ox,oy,DUEL_GW,DUEL_GH);
+  c.restore();
 
   // food
   if(myFood){
@@ -1861,6 +1937,18 @@ function drawHUD(){
     ctx.fillText(`🚀 x${5-missiles.length}  [SPACE]`,10,SIZE-8);
   }
 
+  // 手持技能提示（非對戰模式）
+  if(gameMode.value!=="tron"&&heldPU.value){
+    const col=PU_COLOR[heldPU.value];
+    ctx.save();
+    ctx.fillStyle=col;
+    ctx.font='bold 10px "Courier New"';
+    ctx.textAlign="center";
+    ctx.fillText(`[SPACE] ${PU_ICON[heldPU.value]} ${PU_LABEL[heldPU.value]}`,SIZE/2,SIZE-28);
+    ctx.textAlign="left";
+    ctx.restore();
+  }
+
   // active PUs (non-duel mode)
   if(gameMode.value!=="tron") activePUs.forEach((pu,i)=>{
     const bw=68,x=10+i*(bw+8),y=SIZE-22;
@@ -2044,8 +2132,8 @@ onUnmounted(()=>{document.removeEventListener("keydown",key);document.removeEven
               <button class="btn-ai" @click="startGame('tron', true)">🤖 vs AI 電腦</button>
             </div>
             <div class="ctrl-hint">
-              <span>P1 ⬆⬇⬅➡ + <b>空白鍵</b>(技能)</span> ｜
-              <span>P2 <b>W A S D</b> + <b>0</b>(技能)</span>
+              <span>P1 <b>W A S D</b> + <b>空白鍵</b>(技能)</span> ｜
+              <span>P2 ⬆⬇⬅➡ + <b>0</b>(技能)</span>
             </div>
           </template>
 
@@ -2164,7 +2252,7 @@ onUnmounted(()=>{document.removeEventListener("keydown",key);document.removeEven
         <!-- Duel winner -->
         <template v-if="gameMode==='tron'">
           <div class="go-tron-winner">{{tronWinner}}</div>
-          <div class="go-who" style="margin-bottom:8px;">P1 🟢 vs 🟣 P2 {{is2PAI?'(🤖 AI)':'(WASD)'}}</div>
+          <div class="go-who" style="margin-bottom:8px;">P1 🟢（WASD）vs 🟣 P2 {{is2PAI?'(🤖 AI)':'（⬆⬇⬅➡）'}}</div>
           <div class="go-sub">P1 剩 {{lives1}} 命 ｜ 得分 {{score1}} ｜ P2 剩 {{lives2}} 命 ｜ 得分 {{score2}}</div>
         </template>
 
@@ -2211,6 +2299,21 @@ onUnmounted(()=>{document.removeEventListener("keydown",key);document.removeEven
                 <button class="btn-ghost" @click="goMenuFromPause">🏠 主選單</button>
               </div>
               <div class="pause-hint">按 ESC 或 P 也可繼續</div>
+            </div>
+          </div>
+        </transition>
+
+        <!-- Revive prompt -->
+        <transition name="pause-fade">
+          <div v-if="showRevivePrompt" class="pause-overlay">
+            <div class="pause-box">
+              <div class="pause-icon">❤️</div>
+              <div class="pause-title">復活？</div>
+              <div class="pause-sub">你有一個額外生命，要使用嗎？</div>
+              <div class="pause-btns">
+                <button class="btn-play pause-resume" @click="reviveYes">❤️ 使用（消耗）</button>
+                <button class="btn-ghost" @click="reviveNo">✕ 不用了</button>
+              </div>
             </div>
           </div>
         </transition>
