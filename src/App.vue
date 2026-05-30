@@ -587,8 +587,8 @@ function key(e:KeyboardEvent) {
   }
   if(state.value!=="playing"||paused.value) return;
 
-  // Player 1: WASD or Arrow keys — AI 模式時鎖住
-  if(!isAI.value){
+  // Player 1: WASD or Arrow keys — 單人 AI 模式才鎖住
+  if(!isAI.value||gameMode.value==="tron"){
     const p1Arrow = gameMode.value!=="tron"||is2PAI.value;
     if(e.key==="w"||e.key==="W"||(p1Arrow&&e.key==="ArrowUp"))   {e.preventDefault();pushDir(dirQueue,"UP",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
     if(e.key==="s"||e.key==="S"||(p1Arrow&&e.key==="ArrowDown")) {e.preventDefault();pushDir(dirQueue,"DOWN",dirQueue.length?dirQueue[dirQueue.length-1]!:dir);}
