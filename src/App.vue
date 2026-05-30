@@ -1036,7 +1036,8 @@ function duelAI() {
   const ALL:("UP"|"DOWN"|"LEFT"|"RIGHT")[]=["UP","DOWN","LEFT","RIGHT"];
 
   const inOpp=inOpponentGrid2;
-  const ghost=activePUs2.some(p=>p.type==="ghost");
+  const ghostItem=activePUs2.find(p=>p.type==="ghost");
+  const ghost=!!ghostItem&&ghostItem.steps>1; // 剩 1 步以下=即將過期，不給穿牆
   const sameGrid=getCurrentGrid(1)===getCurrentGrid(2);
   const myTraps=inOpp?traps1:traps2;
   const myFood=inOpp?food:food2;
@@ -1044,6 +1045,7 @@ function duelAI() {
   const myPortal=inOpp?null:portal2;
   const oppPortal=inOpp?portal1:null;
   const hasSkill=heldSkill2!==null;
+  const lastDir=dir2;
 
   // ── 技能使用 ──
   if(hasSkill&&heldSkill2==="trap"&&!inOpp){activateDuelSkill(2);}
@@ -1270,6 +1272,11 @@ function duelAI() {
     if(myPU&&!hasSkill&&!(inOpp&&myPU.x===-1)){const p=aStar(nx,ny,myPU.x,myPU.y,NO_TAIL_OBS);if(p)score+=3000;}
     // ⑨ 邊緣偏好
     if(snake2.length>6){const ne=(nx<=2||ny<=2||nx>=GRID-3||ny>=GRID-3)?1:0;score+=ne*snake2.length*5;}
+    // ⑩ 方向穩定性（防止蛇長時上下亂砲）
+    if(d===lastDir)score+=60000;
+    // ⑪ 長蛇空間保留
+    if(snake2.length>80&&space<snake2.length*1.5)score-=500000;
+    if(snake2.length>120&&space<snake2.length*2)score-=800000;
 
     if(score>bestScore){bestScore=score;bestDir=d;}
   }
