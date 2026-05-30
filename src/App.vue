@@ -1127,269 +1127,99 @@ function stepDuel() {
 
 // ── Duel AI（Hamiltonian 生存架構：嚴格遵循循環 + 安全捷徑 + Flood Fill）──
 function duelAI() {
-  const head=snake2[0]!;
-  const tail=snake2[snake2.length-1]!;
-  const headIdx=(HC[head.x]as number[])[head.y]!;
-  const tailIdx=(HC[tail.x]as number[])[tail.y]!;
-  const dv:Record<string,{x:number;y:number}>={UP:{x:0,y:-1},DOWN:{x:0,y:1},LEFT:{x:-1,y:0},RIGHT:{x:1,y:0}};
-  const OPP:Record<string,string>={UP:"DOWN",DOWN:"UP",LEFT:"RIGHT",RIGHT:"LEFT"};
-  const ALL:("UP"|"DOWN"|"LEFT"|"RIGHT")[]=["UP","DOWN","LEFT","RIGHT"];
+  const h=snake2[0]!, t=snake2[snake2.length-1]!;
+  const hi=(HC[h.x]as number[])[h.y]!;
+  const ti=(HC[t.x]as number[])[t.y]!;
+  const dv={UP:{x:0,y:-1},DOWN:{x:0,y:1},LEFT:{x:-1,y:0},RIGHT:{x:1,y:0}};
+  const OPP:{[k:string]:string}={UP:"DOWN",DOWN:"UP",LEFT:"RIGHT",RIGHT:"LEFT"};
+  const ALL=["UP","DOWN","LEFT","RIGHT"] as const;
+  const N=GRID*GRID;
 
-  const inOpp=inOpponentGrid2;
-  const ghostItem=activePUs2.find(p=>p.type==="ghost");
-  const ghost=!!ghostItem&&ghostItem.steps>1; // 剩 1 步以下=即將過期，不給穿牆
-  const sameGrid=getCurrentGrid(1)===getCurrentGrid(2);
+  const ghost=!!activePUs2.find(p=>p.type==="ghost")&&activePUs2.find(p=>p.type==="ghost")!.steps>1;
+  const sg=getCurrentGrid(1)===getCurrentGrid(2);
   const myTraps=inOpp?traps1:traps2;
-  const myFood=inOpp?food:food2;
-  const myPU=inOpp?fieldPU:fieldPU2;
-  const myPortal=inOpp?null:portal2;
-  const oppPortal=inOpp?portal1:null;
-  const hasSkill=heldSkill2!==null;
-  const lastDir=dir2;
+  const mf=inOpp?food:food2;
+  const fe=!!mf&&!(inOpp&&mf.x===-1);
 
-  // ── 技能使用 ──
-  if(hasSkill&&heldSkill2==="trap"&&!inOpp){activateDuelSkill(2);}
-  if(hasSkill&&heldSkill2==="remove-trap"&&traps2.length>0){activateDuelSkill(2);}
-  if(hasSkill&&heldSkill2==="shield"){
-    let space=0;for(const d of ALL){let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;if(nx>=0&&ny>=0&&nx<GRID&&ny<GRID)space++;}
-    if(space<2)activateDuelSkill(2);
-  }
-  if(hasSkill&&heldSkill2==="ghost"){
-    let space=0;for(const d of ALL){let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;if(nx>=0&&ny>=0&&nx<GRID&&ny<GRID)space++;}
-    if(space<1)activateDuelSkill(2);
-  }
-  if(hasSkill&&heldSkill2==="double"){activateDuelSkill(2);}
-  if(hasSkill&&heldSkill2==="shrink"&&snake2.length>8){activateDuelSkill(2);}
-  if(hasSkill&&heldSkill2==="slow"&&sameGrid){activateDuelSkill(2);}
-
-  // ── 障礙物工廠 ──
-  function buildObs(includeTail:boolean):Set<string>{
+  // ── obstacles (tail excluded for non-eating moves) ──
+  function o(incTail:boolean):Set<string>{
     const s=new Set<string>();
     for(const seg of snake2)s.add(`${seg.x},${seg.y}`);
-    if(sameGrid)for(const seg of snake)s.add(`${seg.x},${seg.y}`);
-    for(const t of myTraps)s.add(`${t.x},${t.y}`);
-    if(!includeTail)s.delete(`${tail.x},${tail.y}`);
+    if(sg)for(const seg of snake)s.add(`${seg.x},${seg.y}`);
+    for(const tra of myTraps)s.add(`${tra.x},${tra.y}`);
+    if(!incTail)s.delete(`${t.x},${t.y}`);
     return s;
   }
 
   // ── A* ──
-  function aStar(sx:number,sy:number,tx:number,ty:number,obs:Set<string>):{dir:"UP"|"DOWN"|"LEFT"|"RIGHT";pathLen:number}|null{
-    const obs2=new Set(obs);
-    obs2.delete(`${tx},${ty}`);
-    obs2.add(`${sx},${sy}`);
-    const h=(x:number,y:number)=>Math.abs(x-tx)+Math.abs(y-ty);
-    const open:{x:number;y:number;g:number;f:number;dir:"UP"|"DOWN"|"LEFT"|"RIGHT"|null}[]=[];
-    const closed=new Set<string>();
-    open.push({x:sx,y:sy,g:0,f:h(sx,sy),dir:null});
-    while(open.length){
-      let bi=0;for(let i=1;i<open.length;i++)if(open[i]!.f<open[bi]!.f)bi=i;
-      const cur=open.splice(bi,1)[0]!;
+  function a(sx:number,sy:number,tx:number,ty:number,obs:Set<string>):{dir:"UP"|"DOWN"|"LEFT"|"RIGHT";pathLen:number}|null{
+    const o2=new Set(obs);
+    o2.delete(`${tx},${ty}`);
+    o2.add(`${sx},${sy}`);
+    const hf=(x:number,y:number)=>Math.abs(x-tx)+Math.abs(y-ty);
+    const op:{x:number;y:number;g:number;f:number;dir:"UP"|"DOWN"|"LEFT"|"RIGHT"|null}[]=[];
+    const cl=new Set<string>();
+    op.push({x:sx,y:sy,g:0,f:hf(sx,sy),dir:null});
+    while(op.length){
+      let bi=0;for(let i=1;i<op.length;i++)if(op[i]!.f<op[bi]!.f)bi=i;
+      const cur=op.splice(bi,1)[0]!;
       const ck=`${cur.x},${cur.y}`;
       if(cur.x===tx&&cur.y===ty&&cur.dir)return{dir:cur.dir,pathLen:cur.g};
-      if(closed.has(ck))continue;
-      closed.add(ck);
+      if(cl.has(ck))continue;
+      cl.add(ck);
       for(const d of ALL){
         if(d===OPP[dir2])continue;
         let nx=cur.x+dv[d]!.x,ny=cur.y+dv[d]!.y;
         if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
         else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
         const nk=`${nx},${ny}`;
-        if(closed.has(nk)||obs2.has(nk))continue;
-        if(!ghost&&myTraps.some(t=>t.x===nx&&t.y===ny))continue;
+        if(cl.has(nk)||o2.has(nk))continue;
+        if(!ghost&&myTraps.some(tra=>tra.x===nx&&tra.y===ny))continue;
         const ng=cur.g+1;
-        const ex=open.find(o=>o.x===nx&&o.y===ny);
-        if(ex){if(ng<ex.g){ex.g=ng;ex.f=ng+h(nx,ny);}}
-        else open.push({x:nx,y:ny,g:ng,f:ng+h(nx,ny),dir:cur.dir??d});
+        const ex=op.find(e=>e.x===nx&&e.y===ny);
+        if(ex){if(ng<ex.g){ex.g=ng;ex.f=ng+hf(nx,ny);}}
+        else op.push({x:nx,y:ny,g:ng,f:ng+hf(nx,ny),dir:cur.dir??d});
       }
     }
     return null;
   }
 
-  // ── Flood Fill ──
-  function floodFill(sx:number,sy:number,obs:Set<string>):number{
-    const vis=new Set(obs);
-    vis.add(`${sx},${sy}`);
-    const q:[number,number][]=[[sx,sy]];
-    let cnt=0;
-    while(q.length){
-      const [x,y]=q.shift()!;cnt++;
-      for(const d of ALL){
-        let nx=x+dv[d]!.x,ny=y+dv[d]!.y;
-        if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
-        else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
-        const nk=`${nx},${ny}`;
-        if(vis.has(nk))continue;
-        vis.add(nk);q.push([nx,ny]);
-      }
+  // ── Shortcut: A* to food, check remaining HC path ──
+  if(fe){
+    const obsNoTail=o(false);
+    const fi=(HC[mf!.x]as number[])[mf!.y]!;
+    const p2f=a(h.x,h.y,mf!.x,mf!.y,obsNoTail);
+    if(p2f){
+      const rem=(ti-fi+N)%N;
+      if(rem>snake2.length){dir2=p2f.dir;return;}
     }
-    return cnt;
   }
 
-  // ── 虛擬蛇障礙（吃完食物後）──
-  function afterFoodObs(fx:number,fy:number,pathLen:number):Set<string>{
-    const nonEat=Math.min(pathLen-1,snake2.length-1);
-    const keep=snake2.length-nonEat;
-    const s=new Set<string>();
-    for(let i=0;i<keep;i++){
-      const seg=snake2[i]!;
-      if(seg.x===fx&&seg.y===fy)continue;
-      s.add(`${seg.x},${seg.y}`);
-    }
-    return s;
+  // ── HC follow: pick direction with max forward progress ──
+  const obsNoTail=o(false);
+  let best:"UP"|"DOWN"|"LEFT"|"RIGHT"|null=null;
+  let bestS=-1;
+  for(const d of ALL){
+    if(d===OPP[dir2])continue;
+    let nx=h.x+dv[d]!.x,ny=h.y+dv[d]!.y;
+    if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
+    else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
+    if(obsNoTail.has(`${nx},${ny}`))continue;
+    const ni=(HC[nx]as number[])[ny]!;
+    const fw=(ni-hi+N)%N;
+    if(fw>bestS){bestS=fw;best=d;}
   }
-
-  // ── 移動後障礙集 ──
-  function afterMoveObs(nx:number,ny:number,eat:boolean):Set<string>{
-    const s=buildObs(eat);
-    s.delete(`${nx},${ny}`);
-    return s;
-  }
-
-  // ── 相鄰空格數 ──
-  function openNbrs(cx:number,cy:number,obs:Set<string>):number{
-    let n=0;
+  // Fallback: any non-reverse safe direction
+  if(!best){
     for(const d of ALL){
-      let x=cx+dv[d]!.x,y=cy+dv[d]!.y;
-      if(ghost){x=(x+GRID)%GRID;y=(y+GRID)%GRID;}
-      if(x<0||y<0||x>=GRID||y>=GRID)continue;
-      if(!obs.has(`${x},${y}`))n++;
-    }
-    return n;
-  }
-
-  // ── 在下一個 HC 方向上找到第一個安全格子 ──
-  function nextHC(idx:number,obs:Set<string>):number|null{
-    for(let s=1;s<GRID*GRID;s++){
-      const ni=(idx+s)%(GRID*GRID);
-      const p=HC_INV[ni]!;
-      if(!obs.has(`${p.x},${p.y}`))return ni;
-    }
-    return null;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // 核心 AI 決策：四步驟生存演算法
-  // ─────────────────────────────────────────────────────────────
-  //   Step 1 — Find Path to Food：計算真蛇頭到食物的最短路徑
-  //   Step 2 — Virtual Snake Simulation：建立虛擬蛇模擬吃完食物
-  //   Step 3 — Check Tail Connectivity：虛擬蛇頭能否連回虛擬蛇尾
-  //   Step 4 — Survival Decision：安全→吃，不安全→追尾/最大空格
-  // ─────────────────────────────────────────────────────────────
-  const OBSTACLES_WITHOUT_TAIL: Set<string>  = buildObs(false);
-  const OBSTACLES_WITH_TAIL:    Set<string>  = buildObs(true);
-  const CYCLE_LENGTH: number = GRID * GRID;
-  const FOOD_EXISTS: boolean = !!myFood && !(inOpp && myFood.x === -1);
-
-  let bestDirection: "UP" | "DOWN" | "LEFT" | "RIGHT" | null = null;
-  let bestDirectionScore: number = -Infinity;
-
-  // ── 全域捷徑：A* 找最短食物路徑，虛擬蛇確認安全就記下 ──
-  let go: "UP"|"DOWN"|"LEFT"|"RIGHT"|null = null;
-  if (FOOD_EXISTS) {
-    const p2f = aStar(head.x, head.y, myFood!.x, myFood!.y, OBSTACLES_WITHOUT_TAIL);
-    if (p2f) {
-      const ne = Math.min(p2f.pathLen - 1, snake2.length - 1);
-      const vi = snake2.length - 1 - ne;
-      const vt = snake2[vi]!;
-      const ao = afterFoodObs(myFood!.x, myFood!.y, p2f.pathLen);
-      ao.delete(`${vt.x},${vt.y}`);
-      if (aStar(myFood!.x, myFood!.y, vt.x, vt.y, ao)) go = p2f.dir;
+      if(d===OPP[dir2])continue;
+      let nx=h.x+dv[d]!.x,ny=h.y+dv[d]!.y;
+      if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
+      else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
+      if(!obsNoTail.has(`${nx},${ny}`)){best=d;break;}
     }
   }
-
-  // ─── 逐一評估四個可行方向 ─────────────────────────────────
-  for (const d of ALL) {
-    if (d === OPP[dir2]) continue;
-
-    let nx = head.x + dv[d]!.x, ny = head.y + dv[d]!.y;
-    if (ghost) { nx = (nx+GRID)%GRID; ny = (ny+GRID)%GRID; }
-    else if (nx<0||ny<0||nx>=GRID||ny>=GRID) continue;
-
-    const WILL_EAT = FOOD_EXISTS && nx === myFood!.x && ny === myFood!.y;
-    const colObs = buildObs(WILL_EAT);
-    if (colObs.has(`${nx},${ny}`)) continue;
-
-    let score = 0;
-
-    // ═══ 全域捷徑獎勵：走 go 方向給超高優待 ═══
-    if (d === go) score += 2_000_000;
-
-    // ═══ 食物路徑安全檢查（WILL_EAT 時）══════
-    let canReachTailAfterEat = false;
-    if (WILL_EAT) {
-      const p2f = aStar(head.x, head.y, myFood!.x, myFood!.y, OBSTACLES_WITHOUT_TAIL);
-      if (p2f) {
-        const ne = Math.min(p2f.pathLen - 1, snake2.length - 1);
-        const vi = snake2.length - 1 - ne;
-        const vt = snake2[vi]!;
-        const ao = afterFoodObs(myFood!.x, myFood!.y, p2f.pathLen);
-        ao.delete(`${vt.x},${vt.y}`);
-        canReachTailAfterEat = aStar(myFood!.x, myFood!.y, vt.x, vt.y, ao) !== null;
-      }
-    }
-
-    // ═══ 尾巴連通性（go 方向已由虛擬蛇驗證，跳過）═══
-    let tr: {dir:"UP"|"DOWN"|"LEFT"|"RIGHT";pathLen:number}|null = null;
-    if (d !== go) {
-      tr = aStar(nx, ny, tail.x, tail.y, WILL_EAT ? OBSTACLES_WITH_TAIL : OBSTACLES_WITHOUT_TAIL);
-      if (!tr) continue; // ── 死路，跳過
-    }
-
-    // ═══ 生存決策 ═══
-    if (canReachTailAfterEat) {
-      score += 1_000_000;
-      const ni = (HC[nx] as number[])[ny]!;
-      const fw = (ni - headIdx + CYCLE_LENGTH) % CYCLE_LENGTH;
-      score += (CYCLE_LENGTH - fw) * 5;
-    } else if (d !== go) {
-      // HC 追尾模式（最長路徑苟活）
-      const ni = (HC[nx] as number[])[ny]!;
-      const fw = (ni - headIdx + CYCLE_LENGTH) % CYCLE_LENGTH;
-      score += (CYCLE_LENGTH - fw) * 80;
-      score += Math.min(tr!.pathLen, 500) * 3;
-      const ao = afterMoveObs(nx, ny, false);
-      const sp = floodFill(nx, ny, ao);
-      score += sp * 20;
-      if (sp < snake2.length * 1.5) score -= 500_000;
-    }
-
-    // ═══ 學習系統加成 ═══
-    const ni = (HC[nx] as number[])[ny]!;
-    score -= getLearnPenalty(ni, d, snake2.length);
-    score += getHumanBonus(ni, d, snake2.length);
-
-    // ═══ 選出最佳方向 ═══
-    if (score > bestDirectionScore) {
-      bestDirectionScore = score;
-      bestDirection = d;
-    }
-  }
-
-  // ─── 緊急備援：任何安全方向 ───────────────────────────
-  if (bestDirection === null) {
-    for (const direction of ALL) {
-      if (direction === OPP[dir2]) continue;
-
-      let fallbackX: number = head.x + dv[direction]!.x;
-      let fallbackY: number = head.y + dv[direction]!.y;
-
-      if (ghost) {
-        fallbackX = (fallbackX + GRID) % GRID;
-        fallbackY = (fallbackY + GRID) % GRID;
-      } else if (fallbackX < 0 || fallbackY < 0 || fallbackX >= GRID || fallbackY >= GRID) {
-        continue;
-      }
-
-      if (!OBSTACLES_WITHOUT_TAIL.has(`${fallbackX},${fallbackY}`)) {
-        bestDirection = direction;
-        break;
-      }
-    }
-  }
-
-  if (bestDirection !== null) {
-    dir2 = bestDirection;
-  }
+  if(best)dir2=best;
 }
 
 
