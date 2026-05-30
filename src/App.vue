@@ -1127,100 +1127,181 @@ function stepDuel() {
 
 // ── Duel AI（Hamiltonian 生存架構：嚴格遵循循環 + 安全捷徑 + Flood Fill）──
 function duelAI() {
-  const h=snake2[0]!, t=snake2[snake2.length-1]!;
-  const hi=(HC[h.x]as number[])[h.y]!;
-  const ti=(HC[t.x]as number[])[t.y]!;
-  const dv={UP:{x:0,y:-1},DOWN:{x:0,y:1},LEFT:{x:-1,y:0},RIGHT:{x:1,y:0}};
-  const OPP:{[k:string]:string}={UP:"DOWN",DOWN:"UP",LEFT:"RIGHT",RIGHT:"LEFT"};
-  const ALL=["UP","DOWN","LEFT","RIGHT"] as const;
-  const N=GRID*GRID;
+  const head = snake2[0]!;
+  const tail = snake2[snake2.length - 1]!;
+  const directionVectors: Record<string, { x: number; y: number }> = {
+    UP: { x: 0, y: -1 }, DOWN: { x: 0, y: 1 },
+    LEFT: { x: -1, y: 0 }, RIGHT: { x: 1, y: 0 }
+  };
+  const oppositeDirection: Record<string, string> = {
+    UP: "DOWN", DOWN: "UP", LEFT: "RIGHT", RIGHT: "LEFT"
+  };
+  const allDirections: ("UP" | "DOWN" | "LEFT" | "RIGHT")[] = ["UP", "DOWN", "LEFT", "RIGHT"];
 
-  const ghost=!!activePUs2.find(p=>p.type==="ghost")&&activePUs2.find(p=>p.type==="ghost")!.steps>1;
-  const io=inOpponentGrid2;
-  const sg=getCurrentGrid(1)===getCurrentGrid(2);
-  const myTraps=io?traps1:traps2;
-  const mf=io?food:food2;
-  const fe=!!mf&&!(io&&mf.x===-1);
+  const ghostActive = !!activePUs2.find(p => p.type === "ghost") &&
+    activePUs2.find(p => p.type === "ghost")!.steps > 1;
+  const inOpponentGrid = inOpponentGrid2;
+  const sameGrid = getCurrentGrid(1) === getCurrentGrid(2);
+  const myTraps = inOpponentGrid ? traps1 : traps2;
+  const myFood = inOpponentGrid ? food : food2;
+  const foodExists = !!myFood && !(inOpponentGrid && myFood.x === -1);
 
-  // ── obstacles (tail excluded for non-eating moves) ──
-  function o(incTail:boolean):Set<string>{
-    const s=new Set<string>();
-    for(const seg of snake2)s.add(`${seg.x},${seg.y}`);
-    if(sg)for(const seg of snake)s.add(`${seg.x},${seg.y}`);
-    for(const tra of myTraps)s.add(`${tra.x},${tra.y}`);
-    if(!incTail)s.delete(`${t.x},${t.y}`);
-    return s;
+  // ── Helper: build obstacle set (without tail since non-eating moves pop it) ──
+  function buildObstaclesWithoutTail(): Set<string> {
+    const obstacles = new Set<string>();
+    for (const segment of snake2) obstacles.add(`${segment.x},${segment.y}`);
+    if (sameGrid) for (const segment of snake) obstacles.add(`${segment.x},${segment.y}`);
+    for (const trap of myTraps) obstacles.add(`${trap.x},${trap.y}`);
+    obstacles.delete(`${tail.x},${tail.y}`);
+    return obstacles;
   }
 
-  // ── A* ──
-  function a(sx:number,sy:number,tx:number,ty:number,obs:Set<string>):{dir:"UP"|"DOWN"|"LEFT"|"RIGHT";pathLen:number}|null{
-    const o2=new Set(obs);
-    o2.delete(`${tx},${ty}`);
-    o2.add(`${sx},${sy}`);
-    const hf=(x:number,y:number)=>Math.abs(x-tx)+Math.abs(y-ty);
-    const op:{x:number;y:number;g:number;f:number;dir:"UP"|"DOWN"|"LEFT"|"RIGHT"|null}[]=[];
-    const cl=new Set<string>();
-    op.push({x:sx,y:sy,g:0,f:hf(sx,sy),dir:null});
-    while(op.length){
-      let bi=0;for(let i=1;i<op.length;i++)if(op[i]!.f<op[bi]!.f)bi=i;
-      const cur=op.splice(bi,1)[0]!;
-      const ck=`${cur.x},${cur.y}`;
-      if(cur.x===tx&&cur.y===ty&&cur.dir)return{dir:cur.dir,pathLen:cur.g};
-      if(cl.has(ck))continue;
-      cl.add(ck);
-      for(const d of ALL){
-        if(d===OPP[dir2])continue;
-        let nx=cur.x+dv[d]!.x,ny=cur.y+dv[d]!.y;
-        if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
-        else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
-        const nk=`${nx},${ny}`;
-        if(cl.has(nk)||o2.has(nk))continue;
-        if(!ghost&&myTraps.some(tra=>tra.x===nx&&tra.y===ny))continue;
-        const ng=cur.g+1;
-        const ex=op.find(e=>e.x===nx&&e.y===ny);
-        if(ex){if(ng<ex.g){ex.g=ng;ex.f=ng+hf(nx,ny);}}
-        else op.push({x:nx,y:ny,g:ng,f:ng+hf(nx,ny),dir:cur.dir??d});
+  // ── Breadth-First Search: returns array of direction strings, or null if unreachable ──
+  function breadthFirstSearch(
+    startX: number, startY: number,
+    targetX: number, targetY: number,
+    obstacles: Set<string>
+  ): string[] | null {
+    const visited = new Set<string>();
+    visited.add(`${startX},${startY}`);
+
+    type QueueNode = { x: number; y: number; path: string[] };
+    const queue: QueueNode[] = [{ x: startX, y: startY, path: [] }];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+
+      if (current.x === targetX && current.y === targetY) {
+        return current.path;
+      }
+
+      for (const direction of allDirections) {
+        // First step cannot reverse direction
+        if (current.path.length === 0 && direction === oppositeDirection[dir2]) continue;
+
+        let nextX = current.x + directionVectors[direction].x;
+        let nextY = current.y + directionVectors[direction].y;
+
+        if (ghostActive) {
+          nextX = (nextX + GRID) % GRID;
+          nextY = (nextY + GRID) % GRID;
+        } else if (nextX < 0 || nextY < 0 || nextX >= GRID || nextY >= GRID) {
+          continue;
+        }
+
+        const neighborKey = `${nextX},${nextY}`;
+        if (visited.has(neighborKey)) continue;
+        if (obstacles.has(neighborKey)) continue;
+        if (!ghostActive && myTraps.some(trap => trap.x === nextX && trap.y === nextY)) continue;
+
+        visited.add(neighborKey);
+        queue.push({ x: nextX, y: nextY, path: [...current.path, direction] });
       }
     }
+
     return null;
   }
 
-  // ── Shortcut: A* to food, check remaining HC path ──
-  if(fe){
-    const obsNoTail=o(false);
-    const fi=(HC[mf!.x]as number[])[mf!.y]!;
-    const p2f=a(h.x,h.y,mf!.x,mf!.y,obsNoTail);
-    if(p2f){
-      const rem=(ti-fi+N)%N;
-      if(rem>snake2.length){dir2=p2f.dir;return;}
+  // ════════════════════════════════════════════════════════════
+  //  STEP 1 + 2 + 3: Shortest Path to Food → Virtual Snake
+  //  → Tail Connectivity
+  // ════════════════════════════════════════════════════════════
+  if (foodExists) {
+    const pathToFood = breadthFirstSearch(
+      head.x, head.y,
+      myFood!.x, myFood!.y,
+      buildObstaclesWithoutTail()
+    );
+
+    if (pathToFood !== null && pathToFood.length > 0) {
+      // ── How many non-eating steps (tail pops) before final eating step? ──
+      const nonEatingSteps = Math.min(pathToFood.length - 1, snake2.length - 1);
+      const virtualTailIndex = snake2.length - 1 - nonEatingSteps;
+      const virtualTail = snake2[virtualTailIndex]!;
+
+      // ── Build obstacle set representing the virtual snake's body after eating ──
+      //     Uses original segment positions (conservative approximation)
+      const obstaclesAfterEating = new Set<string>();
+      for (let i = 0; i < virtualTailIndex; i++) {
+        obstaclesAfterEating.add(`${snake2[i].x},${snake2[i].y}`);
+      }
+      // Virtual tail cell is walkable (will move when virtual snake continues)
+      obstaclesAfterEating.delete(`${virtualTail.x},${virtualTail.y}`);
+
+      // ── Can the virtual snake head (food position) reach its virtual tail? ──
+      const canReachTail = breadthFirstSearch(
+        myFood!.x, myFood!.y,
+        virtualTail.x, virtualTail.y,
+        obstaclesAfterEating
+      );
+
+      if (canReachTail !== null) {
+        // Safe to eat! Follow the first step toward food.
+        dir2 = pathToFood[0] as "UP" | "DOWN" | "LEFT" | "RIGHT";
+        return;
+      }
     }
   }
 
-  // ── HC follow: pick direction with max forward progress ──
-  const obsNoTail=o(false);
-  let best:"UP"|"DOWN"|"LEFT"|"RIGHT"|null=null;
-  let bestS=-1;
-  for(const d of ALL){
-    if(d===OPP[dir2])continue;
-    let nx=h.x+dv[d]!.x,ny=h.y+dv[d]!.y;
-    if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
-    else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
-    if(obsNoTail.has(`${nx},${ny}`))continue;
-    const ni=(HC[nx]as number[])[ny]!;
-    const fw=(ni-hi+N)%N;
-    if(fw>bestS){bestS=fw;best=d;}
-  }
-  // Fallback: any non-reverse safe direction
-  if(!best){
-    for(const d of ALL){
-      if(d===OPP[dir2])continue;
-      let nx=h.x+dv[d]!.x,ny=h.y+dv[d]!.y;
-      if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
-      else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
-      if(!obsNoTail.has(`${nx},${ny}`)){best=d;break;}
+  // ════════════════════════════════════════════════════════════
+  //  STEP 4 (Fallback): Longest Path to Tail — evaluate each
+  //  candidate direction and pick the one with the longest
+  //  safe path to the tail.
+  // ════════════════════════════════════════════════════════════
+  const obstacles = buildObstaclesWithoutTail();
+  let bestDirection: "UP" | "DOWN" | "LEFT" | "RIGHT" | null = null;
+  let longestPathLength = -1;
+
+  for (const direction of allDirections) {
+    if (direction === oppositeDirection[dir2]) continue;
+
+    let nextHeadX = head.x + directionVectors[direction].x;
+    let nextHeadY = head.y + directionVectors[direction].y;
+
+    if (ghostActive) {
+      nextHeadX = (nextHeadX + GRID) % GRID;
+      nextHeadY = (nextHeadY + GRID) % GRID;
+    } else if (nextHeadX < 0 || nextHeadY < 0 || nextHeadX >= GRID || nextHeadY >= GRID) {
+      continue;
+    }
+
+    if (obstacles.has(`${nextHeadX},${nextHeadY}`)) continue;
+    if (!ghostActive && myTraps.some(trap => trap.x === nextHeadX && trap.y === nextHeadY)) continue;
+
+    // Shortest path from candidate position to the current tail
+    const pathToTail = breadthFirstSearch(nextHeadX, nextHeadY, tail.x, tail.y, obstacles);
+
+    if (pathToTail !== null && pathToTail.length > longestPathLength) {
+      // Longer path = more space to maneuver before catching up to tail
+      longestPathLength = pathToTail.length;
+      bestDirection = direction;
     }
   }
-  if(best)dir2=best;
+
+  if (bestDirection !== null) {
+    dir2 = bestDirection;
+    return;
+  }
+
+  // ── Emergency fallback: any non-reverse safe direction ──
+  for (const direction of allDirections) {
+    if (direction === oppositeDirection[dir2]) continue;
+
+    let nextHeadX = head.x + directionVectors[direction].x;
+    let nextHeadY = head.y + directionVectors[direction].y;
+
+    if (ghostActive) {
+      nextHeadX = (nextHeadX + GRID) % GRID;
+      nextHeadY = (nextHeadY + GRID) % GRID;
+    } else if (nextHeadX < 0 || nextHeadY < 0 || nextHeadX >= GRID || nextHeadY >= GRID) {
+      continue;
+    }
+
+    if (!obstacles.has(`${nextHeadX},${nextHeadY}`)) {
+      dir2 = direction;
+      return;
+    }
+  }
 }
 
 
