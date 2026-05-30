@@ -1267,89 +1267,160 @@ function duelAI() {
     return null;
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // 神級 AI：虛擬蛇安全檢查 → 尾巴連通性 → 最長路徑苟活
-  // ═══════════════════════════════════════════════════════════
-  const NO_TAIL_OBS=buildObs(false);
-  const TAIL_OBS=buildObs(true);
-  const cycleLen=GRID*GRID;
-  let bestDir:"UP"|"DOWN"|"LEFT"|"RIGHT"|null=null;
-  let bestScore=-Infinity;
+  // ─────────────────────────────────────────────────────────────
+  // 核心 AI 決策：四步驟生存演算法
+  // ─────────────────────────────────────────────────────────────
+  //   Step 1 — Find Path to Food：計算真蛇頭到食物的最短路徑
+  //   Step 2 — Virtual Snake Simulation：建立虛擬蛇模擬吃完食物
+  //   Step 3 — Check Tail Connectivity：虛擬蛇頭能否連回虛擬蛇尾
+  //   Step 4 — Survival Decision：安全→吃，不安全→追尾/最大空格
+  // ─────────────────────────────────────────────────────────────
+  const OBSTACLES_WITHOUT_TAIL: Set<string>  = buildObs(false);
+  const OBSTACLES_WITH_TAIL:    Set<string>  = buildObs(true);
+  const CYCLE_LENGTH: number = GRID * GRID;
+  const FOOD_EXISTS: boolean = !!myFood && !(inOpp && myFood.x === -1);
 
-  for(const d of ALL){
-    if(d===OPP[dir2])continue;
-    let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;
-    if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
-    else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
+  let bestDirection: "UP" | "DOWN" | "LEFT" | "RIGHT" | null = null;
+  let bestDirectionScore: number = -Infinity;
 
-    // ── 碰撞檢查（吃食物時尾巴不移動） ──
-    const stepEats=myFood&&!(inOpp&&myFood.x===-1)&&nx===myFood.x&&ny===myFood.y;
-    if(buildObs(stepEats).has(`${nx},${ny}`))continue;
+  // ─── 逐一評估四個可行方向 ─────────────────────────────────
+  for (const direction of ALL) {
+    // 禁止直接回頭
+    if (direction === OPP[dir2]) continue;
 
-    let score=0;
-    let canEat=false;
+    // 計算新頭座標
+    let nextHeadX: number = head.x + dv[direction]!.x;
+    let nextHeadY: number = head.y + dv[direction]!.y;
 
-    // ═══════════════════════════════════════════════════
-    // ① 虛擬蛇安全檢查 + 尾巴連通性（只有要吃食物時才跑）
-    // ═══════════════════════════════════════════════════
-    if(stepEats){
-      const foodPath=aStar(head.x,head.y,myFood.x,myFood.y,NO_TAIL_OBS);
-      if(foodPath){
-        // 派出虛擬蛇：模擬吃完食物後身體還剩下哪些 segment
-        const nonEat=Math.min(foodPath.pathLen-1,snake2.length-1);
-        const newTail=snake2[snake2.length-1-nonEat]!;
-        const afterObs=afterFoodObs(myFood.x,myFood.y,foodPath.pathLen);
-        afterObs.delete(`${newTail.x},${newTail.y}`);
-        // 檢查吃完後能不能連到尾巴（尾巴連通性）
-        if(aStar(myFood.x,myFood.y,newTail.x,newTail.y,afterObs)){
-          canEat=true; // ✅ 安全！虛擬蛇吃完還走得出去
-        }
+    // Ghost 模式：穿牆環繞
+    if (ghost) {
+      nextHeadX = (nextHeadX + GRID) % GRID;
+      nextHeadY = (nextHeadY + GRID) % GRID;
+    } else if (nextHeadX < 0 || nextHeadY < 0 || nextHeadX >= GRID || nextHeadY >= GRID) {
+      continue; // 撞牆 → 跳過
+    }
+
+    // ─── 判斷這一步是否會吃到食物 ──────────────────────────
+    const WILL_EAT_FOOD: boolean = FOOD_EXISTS && nextHeadX === myFood!.x && nextHeadY === myFood!.y;
+
+    // ─── 碰撞檢查：吃食物時尾巴保留（不 pop），沒吃則尾巴可通行 ──
+    const collisionObstacles: Set<string> = buildObs(WILL_EAT_FOOD);
+    if (collisionObstacles.has(`${nextHeadX},${nextHeadY}`)) continue;
+
+    let currentScore: number = 0;
+    let pathToFoodFound: boolean = false;
+    let canReachTailAfterEating: boolean = false;
+
+    // ═══════════════════════════════════════════════════════════
+    //  Step 1 + 2 + 3：找食物 + 虛擬蛇推演 + 尾巴連通性檢查
+    // ═══════════════════════════════════════════════════════════
+    if (WILL_EAT_FOOD) {
+      // ── Step 1: Find Path to Food ──
+      const pathToFood = aStar(head.x, head.y, myFood!.x, myFood!.y, OBSTACLES_WITHOUT_TAIL);
+
+      if (pathToFood !== null) {
+        pathToFoodFound = true;
+
+        // ── Step 2: Virtual Snake Simulation ──
+        //  虛擬蛇：沿 pathToFood 走，每步頭進尾 pop（最後一步吃食物不 pop）
+        const nonEatingSteps: number = Math.min(pathToFood.pathLen - 1, snake2.length - 1);
+        const virtualSnakeTailIndex: number = snake2.length - 1 - nonEatingSteps;
+        const virtualTail: { x: number; y: number } = snake2[virtualSnakeTailIndex]!;
+
+        //  建構虛擬蛇吃完食物後的障礙物集合（身體保留 segment）
+        const obstaclesAfterEating: Set<string> = afterFoodObs(myFood!.x, myFood!.y, pathToFood.pathLen);
+        obstaclesAfterEating.delete(`${virtualTail.x},${virtualTail.y}`); // 新的尾巴位置可通行
+
+        // ── Step 3: Check Tail Connectivity ──
+        //  虛擬蛇的頭（食物位置）能否走到虛擬蛇的尾巴？
+        const connectivityCheck = aStar(myFood!.x, myFood!.y, virtualTail.x, virtualTail.y, obstaclesAfterEating);
+        canReachTailAfterEating = connectivityCheck !== null;
       }
     }
 
-    // ═══════════════════════════════════════════════════
-    // ② 最長路徑苟活（Hamiltonian Cycle 嚴格遵循）
-    // ═══════════════════════════════════════════════════
-    // 從 (nx,ny) 能不能走到尾巴？
-    const canReachTail=aStar(nx,ny,tail.x,tail.y,canEat?TAIL_OBS:NO_TAIL_OBS);
-    if(!canReachTail)continue; // 走不到尾巴 → 死路一條，跳過
+    // ═══════════════════════════════════════════════════════════
+    //  Step 4 — Survival Decision
+    // ═══════════════════════════════════════════════════════════
+    //  原則：所有移動都必須確保「能走回自己的尾巴」才安全
+    // ───────────────────────────────────────────────────────────
 
-    const nIdx=(HC[nx]as number[])[ny]!;
-    const fwd=(nIdx-headIdx+cycleLen)%cycleLen; // 在 HC 上往前跳了幾格
+    //  查詢移動到 (nextHeadX, nextHeadY) 後能否連到尾巴
+    const tailReachableAfterMove = aStar(
+      nextHeadX, nextHeadY,
+      tail.x, tail.y,
+      canReachTailAfterEating ? OBSTACLES_WITH_TAIL : OBSTACLES_WITHOUT_TAIL
+    );
 
-    // ── (A) 安全吃食物：最高優先級 ──
-    if(canEat){
-      score+=1000000;
-      score+=(cycleLen-fwd)*5; // 越緊密遵循 HC 越好
-    }else{
-      // ── (B) 不吃食物：最長路徑 = 最小 fwd（緊貼 HC） ──
-      score+=(cycleLen-fwd)*80;
-      score+=Math.min(canReachTail.pathLen,500)*3;
-      // 連到尾巴路徑越長 = 迴轉空間越大
-      const sp=floodFill(nx,ny,afterMoveObs(nx,ny,false));
-      score+=sp*20;
-      if(sp<snake2.length*1.5)score-=500000;
+    if (tailReachableAfterMove === null) {
+      continue; // ── 關鍵防線：走不到尾巴 → 死路，跳過
     }
 
-    // 學習系統（沿用）
-    score-=getLearnPenalty(nIdx,d,snake2.length);
-    score+=getHumanBonus(nIdx,d,snake2.length);
+    // ── 4-A：安全吃食物（最高優先級） ──
+    if (canReachTailAfterEating) {
+      currentScore += 1_000_000;
 
-    if(score>bestScore){bestScore=score;bestDir=d;}
-  }
+      // 在 HC 上的前進距離越短（越貼近 cycle），路徑越長越安全
+      const newHeadCycleIndex: number = (HC[nextHeadX] as number[])[nextHeadY]!;
+      const forwardSteps: number = (newHeadCycleIndex - headIdx + CYCLE_LENGTH) % CYCLE_LENGTH;
+      currentScore += (CYCLE_LENGTH - forwardSteps) * 5;
 
-  // ── 緊急模式：只要安全就往哪走 ──
-  if(!bestDir){
-    for(const d of ALL){
-      if(d===OPP[dir2])continue;
-      let nx=head.x+dv[d]!.x,ny=head.y+dv[d]!.y;
-      if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
-      if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
-      if(!NO_TAIL_OBS.has(`${nx},${ny}`)){bestDir=d;break;}
+    // ── 4-B：不吃食物 → 追尾模式（最長路徑苟活） ──
+    } else {
+      //  盡量貼緊 Hamiltonian Cycle：forwardSteps 越小 = 路徑越長
+      const newHeadCycleIndex: number = (HC[nextHeadX] as number[])[nextHeadY]!;
+      const forwardSteps: number = (newHeadCycleIndex - headIdx + CYCLE_LENGTH) % CYCLE_LENGTH;
+      currentScore += (CYCLE_LENGTH - forwardSteps) * 80;
+
+      //  A* 到尾巴的路徑越長 = 迴轉空間越大
+      currentScore += Math.min(tailReachableAfterMove.pathLen, 500) * 3;
+
+      //  連續空格檢查：空間太小就扣分
+      const obstaclesAfterMove: Set<string> = afterMoveObs(nextHeadX, nextHeadY, false);
+      const availableSpace: number = floodFill(nextHeadX, nextHeadY, obstaclesAfterMove);
+      currentScore += availableSpace * 20;
+
+      if (availableSpace < snake2.length * 1.5) {
+        currentScore -= 500_000;
+      }
+    }
+
+    // ── 共通：學習系統加成 ──
+    const newHeadCycleIndex: number = (HC[nextHeadX] as number[])[nextHeadY]!;
+    currentScore -= getLearnPenalty(newHeadCycleIndex, direction, snake2.length);
+    currentScore += getHumanBonus(newHeadCycleIndex, direction, snake2.length);
+
+    // ── 選出最佳方向 ──
+    if (currentScore > bestDirectionScore) {
+      bestDirectionScore = currentScore;
+      bestDirection = direction;
     }
   }
 
-  if(bestDir)dir2=bestDir;
+  // ─── 緊急備援：任何安全方向 ───────────────────────────
+  if (bestDirection === null) {
+    for (const direction of ALL) {
+      if (direction === OPP[dir2]) continue;
+
+      let fallbackX: number = head.x + dv[direction]!.x;
+      let fallbackY: number = head.y + dv[direction]!.y;
+
+      if (ghost) {
+        fallbackX = (fallbackX + GRID) % GRID;
+        fallbackY = (fallbackY + GRID) % GRID;
+      } else if (fallbackX < 0 || fallbackY < 0 || fallbackX >= GRID || fallbackY >= GRID) {
+        continue;
+      }
+
+      if (!OBSTACLES_WITHOUT_TAIL.has(`${fallbackX},${fallbackY}`)) {
+        bestDirection = direction;
+        break;
+      }
+    }
+  }
+
+  if (bestDirection !== null) {
+    dir2 = bestDirection;
+  }
 }
 
 
