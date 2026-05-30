@@ -1249,6 +1249,12 @@ function duelAI() {
         const safe=aStar(myFood.x,myFood.y,newTail.x,newTail.y,afterObs);
         if(safe)score+=500000;
         else score-=500000;
+
+        // ✨ 生存空間比率檢查（防止吃進身體包圍的死角）
+        const lenRatio=space/(snake2.length+1);  // 吃完後自由空間 / 新蛇長
+        if(lenRatio<1.5)score-=3000000;  // 空間比身體還小 → 必死
+        else if(lenRatio<2.5)score-=1000000;  // 空間嚴重不足
+        else if(lenRatio<4)score-=300000;  // 有點擠
       }
     }else if(myFood&&!(inOpp&&myFood.x===-1)){
       const toFood=aStar(nx,ny,myFood.x,myFood.y,NO_TAIL_OBS);
