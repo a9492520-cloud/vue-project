@@ -1125,7 +1125,7 @@ function stepDuel() {
   trySpawnDuelPU(2);
 }
 
-// ── Duel AI（Hamiltonian 生存架構：嚴格遵循循環 + 安全捷徑 + Flood Fill）──
+// ── Duel AI（攻擊型 AI：技能 → 撿道具 → 攻擊 → 吃食物 → 追擊 → 生存）──
 function duelAI() {
   const head = snake2[0]!;
   const tail = snake2[snake2.length - 1]!;
@@ -1145,6 +1145,8 @@ function duelAI() {
   const myTraps = inOpponentGrid ? traps1 : traps2;
   const myFood = inOpponentGrid ? food : food2;
   const foodExists = !!myFood && !(inOpponentGrid && myFood.x === -1);
+  const playerHead = snake[0]!;
+  const playerDir = dir;
 
   // ── Helper: build obstacle set (without tail since non-eating moves pop it) ──
   function buildObstaclesWithoutTail(): Set<string> {
@@ -1156,6 +1158,15 @@ function duelAI() {
     return obstacles;
   }
 
+  // ── Helper: build obstacle set with tail (for skill activation checks) ──
+  function buildObstaclesWithTail(): Set<string> {
+    const obstacles = new Set<string>();
+    for (const segment of snake2) obstacles.add(`${segment.x},${segment.y}`);
+    if (sameGrid) for (const segment of snake) obstacles.add(`${segment.x},${segment.y}`);
+    for (const trap of myTraps) obstacles.add(`${trap.x},${trap.y}`);
+    return obstacles;
+  }
+
   // ── Breadth-First Search: returns array of direction strings, or null if unreachable ──
   function breadthFirstSearch(
     startX: number, startY: number,
@@ -1164,42 +1175,153 @@ function duelAI() {
   ): string[] | null {
     const visited = new Set<string>();
     visited.add(`${startX},${startY}`);
-
     type QueueNode = { x: number; y: number; path: string[] };
     const queue: QueueNode[] = [{ x: startX, y: startY, path: [] }];
-
     while (queue.length > 0) {
       const current = queue.shift()!;
-
-      if (current.x === targetX && current.y === targetY) {
-        return current.path;
-      }
-
+      if (current.x === targetX && current.y === targetY) return current.path;
       for (const direction of allDirections) {
-        // First step cannot reverse direction
         if (current.path.length === 0 && direction === oppositeDirection[dir2]) continue;
-
         let nextX = current.x + directionVectors[direction].x;
         let nextY = current.y + directionVectors[direction].y;
-
         if (ghostActive) {
           nextX = (nextX + GRID) % GRID;
           nextY = (nextY + GRID) % GRID;
         } else if (nextX < 0 || nextY < 0 || nextX >= GRID || nextY >= GRID) {
           continue;
         }
-
         const neighborKey = `${nextX},${nextY}`;
         if (visited.has(neighborKey)) continue;
         if (obstacles.has(neighborKey)) continue;
         if (!ghostActive && myTraps.some(trap => trap.x === nextX && trap.y === nextY)) continue;
-
         visited.add(neighborKey);
         queue.push({ x: nextX, y: nextY, path: [...current.path, direction] });
       }
     }
-
     return null;
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  STEP 0: Skill Usage — activate held skills strategically
+  //  Priority: double > shrink > trap > remove-trap > shield > ghost > slow
+  // ════════════════════════════════════════════════════════════
+  if (heldSkill2) {
+    const skill = heldSkill2;
+    let shouldUse = false;
+    if (skill === "double") {
+      shouldUse = true;
+    } else if (skill === "shrink") {
+      if (snake2.length > 8) shouldUse = true;
+    } else if (skill === "trap" && sameGrid) {
+      shouldUse = true;
+    } else if (skill === "remove-trap") {
+      if (myTraps.length > 0) shouldUse = true;
+    } else if (skill === "shield") {
+      const obs = buildObstaclesWithTail();
+      let safeNeighbors = 0;
+      for (const d of allDirections) {
+        let nx = head.x + directionVectors[d].x;
+        let ny = head.y + directionVectors[d].y;
+        if (ghostActive) { nx = (nx + GRID) % GRID; ny = (ny + GRID) % GRID; }
+        else if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue;
+        if (!obs.has(`${nx},${ny}`)) safeNeighbors++;
+      }
+      if (safeNeighbors < 2) shouldUse = true;
+    } else if (skill === "ghost") {
+      const obs = buildObstaclesWithTail();
+      let safeNeighbors = 0;
+      for (const d of allDirections) {
+        let nx = head.x + directionVectors[d].x;
+        let ny = head.y + directionVectors[d].y;
+        if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue;
+        if (!obs.has(`${nx},${ny}`)) safeNeighbors++;
+      }
+      if (safeNeighbors < 1) shouldUse = true;
+      if (sameGrid && !shouldUse) shouldUse = true;
+    } else if (skill === "slow") {
+      if (sameGrid) shouldUse = true;
+    }
+    if (shouldUse) {
+      if (skill === "trap") {
+        // Smart trap placement: put trap in front of player's direction
+        const trapX = playerHead.x + directionVectors[playerDir].x;
+        const trapY = playerHead.y + directionVectors[playerDir].y;
+        if (trapX >= 0 && trapY >= 0 && trapX < GRID && trapY < GRID &&
+            !snake.some(s => s.x === trapX && s.y === trapY) &&
+            !traps1.some(t => t.x === trapX && t.y === trapY)) {
+          traps1.push({x: trapX, y: trapY});
+          heldSkill2 = null;
+        } else {
+          activateDuelSkill(2);
+        }
+      } else {
+        activateDuelSkill(2);
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  STEP 0.5: Collect useful field PU items (shield / ghost / trap)
+  //  BFS → Virtual Snake → Tail Connectivity (same logic as food)
+  // ════════════════════════════════════════════════════════════
+  const myFieldPU = inOpponentGrid ? fieldPU : fieldPU2;
+  if (myFieldPU && (myFieldPU.type === "shield" || myFieldPU.type === "ghost" || myFieldPU.type === "trap")) {
+    const pathToPU = breadthFirstSearch(
+      head.x, head.y,
+      myFieldPU.x, myFieldPU.y,
+      buildObstaclesWithoutTail()
+    );
+    if (pathToPU !== null && pathToPU.length > 0) {
+      const nonEatingSteps = Math.min(pathToPU.length, snake2.length - 1);
+      const virtualTailIndex = snake2.length - 1 - nonEatingSteps;
+      const virtualTail = snake2[virtualTailIndex]!;
+      const obstaclesAfterMove = new Set<string>();
+      for (let i = 0; i < virtualTailIndex; i++) {
+        obstaclesAfterMove.add(`${snake2[i]!.x},${snake2[i]!.y}`);
+      }
+      obstaclesAfterMove.delete(`${virtualTail.x},${virtualTail.y}`);
+      const canReachTail = breadthFirstSearch(
+        myFieldPU.x, myFieldPU.y,
+        virtualTail.x, virtualTail.y,
+        obstaclesAfterMove
+      );
+      if (canReachTail !== null) {
+        dir2 = pathToPU[0] as "UP" | "DOWN" | "LEFT" | "RIGHT";
+        return;
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  STEP 0.75: Attack / Intercept Player
+  //  When on same grid and player is within 10 BFS steps,
+  //  chase their head with safety check.
+  // ════════════════════════════════════════════════════════════
+  if (sameGrid) {
+    const pathToPlayer = breadthFirstSearch(
+      head.x, head.y,
+      playerHead.x, playerHead.y,
+      buildObstaclesWithoutTail()
+    );
+    if (pathToPlayer !== null && pathToPlayer.length > 0 && pathToPlayer.length <= 10) {
+      const nonEatingSteps = Math.min(pathToPlayer.length, snake2.length - 1);
+      const virtualTailIndex = snake2.length - 1 - nonEatingSteps;
+      const virtualTail = snake2[virtualTailIndex]!;
+      const obstaclesAfterMove = new Set<string>();
+      for (let i = 0; i < virtualTailIndex; i++) {
+        obstaclesAfterMove.add(`${snake2[i]!.x},${snake2[i]!.y}`);
+      }
+      obstaclesAfterMove.delete(`${virtualTail.x},${virtualTail.y}`);
+      const canReachTail = breadthFirstSearch(
+        playerHead.x, playerHead.y,
+        virtualTail.x, virtualTail.y,
+        obstaclesAfterMove
+      );
+      if (canReachTail !== null) {
+        dir2 = pathToPlayer[0] as "UP" | "DOWN" | "LEFT" | "RIGHT";
+        return;
+      }
+    }
   }
 
   // ════════════════════════════════════════════════════════════
@@ -1212,35 +1334,41 @@ function duelAI() {
       myFood!.x, myFood!.y,
       buildObstaclesWithoutTail()
     );
-
     if (pathToFood !== null && pathToFood.length > 0) {
-      // ── How many non-eating steps (tail pops) before final eating step? ──
       const nonEatingSteps = Math.min(pathToFood.length - 1, snake2.length - 1);
       const virtualTailIndex = snake2.length - 1 - nonEatingSteps;
       const virtualTail = snake2[virtualTailIndex]!;
-
-      // ── Build obstacle set representing the virtual snake's body after eating ──
-      //     Uses original segment positions (conservative approximation)
       const obstaclesAfterEating = new Set<string>();
       for (let i = 0; i < virtualTailIndex; i++) {
         const segment = snake2[i]!;
         obstaclesAfterEating.add(`${segment.x},${segment.y}`);
       }
-      // Virtual tail cell is walkable (will move when virtual snake continues)
       obstaclesAfterEating.delete(`${virtualTail.x},${virtualTail.y}`);
-
-      // ── Can the virtual snake head (food position) reach its virtual tail? ──
       const canReachTail = breadthFirstSearch(
         myFood!.x, myFood!.y,
         virtualTail.x, virtualTail.y,
         obstaclesAfterEating
       );
-
       if (canReachTail !== null) {
-        // Safe to eat! Follow the first step toward food.
         dir2 = pathToFood[0] as "UP" | "DOWN" | "LEFT" | "RIGHT";
         return;
       }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  STEP 3.5: Chase Player (fallback, same grid only)
+  //  No safety check — this is better than random wandering
+  // ════════════════════════════════════════════════════════════
+  if (sameGrid) {
+    const pathToPlayer = breadthFirstSearch(
+      head.x, head.y,
+      playerHead.x, playerHead.y,
+      buildObstaclesWithoutTail()
+    );
+    if (pathToPlayer !== null && pathToPlayer.length > 0) {
+      dir2 = pathToPlayer[0] as "UP" | "DOWN" | "LEFT" | "RIGHT";
+      return;
     }
   }
 
@@ -1252,33 +1380,24 @@ function duelAI() {
   const obstacles = buildObstaclesWithoutTail();
   let bestDirection: "UP" | "DOWN" | "LEFT" | "RIGHT" | null = null;
   let longestPathLength = -1;
-
   for (const direction of allDirections) {
     if (direction === oppositeDirection[dir2]) continue;
-
     let nextHeadX = head.x + directionVectors[direction].x;
     let nextHeadY = head.y + directionVectors[direction].y;
-
     if (ghostActive) {
       nextHeadX = (nextHeadX + GRID) % GRID;
       nextHeadY = (nextHeadY + GRID) % GRID;
     } else if (nextHeadX < 0 || nextHeadY < 0 || nextHeadX >= GRID || nextHeadY >= GRID) {
       continue;
     }
-
     if (obstacles.has(`${nextHeadX},${nextHeadY}`)) continue;
     if (!ghostActive && myTraps.some(trap => trap.x === nextHeadX && trap.y === nextHeadY)) continue;
-
-    // Shortest path from candidate position to the current tail
     const pathToTail = breadthFirstSearch(nextHeadX, nextHeadY, tail.x, tail.y, obstacles);
-
     if (pathToTail !== null && pathToTail.length > longestPathLength) {
-      // Longer path = more space to maneuver before catching up to tail
       longestPathLength = pathToTail.length;
       bestDirection = direction;
     }
   }
-
   if (bestDirection !== null) {
     dir2 = bestDirection;
     return;
@@ -1287,17 +1406,14 @@ function duelAI() {
   // ── Emergency fallback: any non-reverse safe direction ──
   for (const direction of allDirections) {
     if (direction === oppositeDirection[dir2]) continue;
-
     let nextHeadX = head.x + directionVectors[direction].x;
     let nextHeadY = head.y + directionVectors[direction].y;
-
     if (ghostActive) {
       nextHeadX = (nextHeadX + GRID) % GRID;
       nextHeadY = (nextHeadY + GRID) % GRID;
     } else if (nextHeadX < 0 || nextHeadY < 0 || nextHeadX >= GRID || nextHeadY >= GRID) {
       continue;
     }
-
     if (!obstacles.has(`${nextHeadX},${nextHeadY}`)) {
       dir2 = direction;
       return;
