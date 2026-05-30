@@ -1268,20 +1268,13 @@ function duelAI() {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // STEP 1：先嘗試 Hamiltonian 正常前進
+  // 神級 AI：虛擬蛇安全檢查 → 尾巴連通性 → 最長路徑苟活
   // ═══════════════════════════════════════════════════════════
   const NO_TAIL_OBS=buildObs(false);
+  const TAIL_OBS=buildObs(true);
+  const cycleLen=GRID*GRID;
   let bestDir:"UP"|"DOWN"|"LEFT"|"RIGHT"|null=null;
   let bestScore=-Infinity;
-
-  // 計算頭在 HC 上離尾巴多遠（標準化 0~1，越大越好）
-  const cycleLen=GRID*GRID;
-  const distOnCycle=(headIdx-tailIdx+cycleLen)%cycleLen;
-  const normDist=distOnCycle/cycleLen; // 0~1，越大表示頭尾距離越遠
-
-  // 找到 cycle 上下一步安全的 HC 目標
-  const hcTarget=nextHC(headIdx,NO_TAIL_OBS);
-  const hcTargetPos=hcTarget!==null?HC_INV[hcTarget]!:{x:-1,y:-1};
 
   for(const d of ALL){
     if(d===OPP[dir2])continue;
@@ -1289,103 +1282,63 @@ function duelAI() {
     if(ghost){nx=(nx+GRID)%GRID;ny=(ny+GRID)%GRID;}
     else if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
 
-    // ── 嚴格碰撞檢查 ──
+    // ── 碰撞檢查（吃食物時尾巴不移動） ──
     const stepEats=myFood&&!(inOpp&&myFood.x===-1)&&nx===myFood.x&&ny===myFood.y;
-    const obsSafe=buildObs(stepEats);
-    if(obsSafe.has(`${nx},${ny}`))continue;
+    if(buildObs(stepEats).has(`${nx},${ny}`))continue;
 
-    const amObs=afterMoveObs(nx,ny,stepEats);
-    const space=floodFill(nx,ny,amObs);
-    const totalEmpty=GRID*GRID-amObs.size;
     let score=0;
+    let canEat=false;
 
-    // ── ① Hamiltonian cycle 遵循獎勵 ──
-    const nIdx=(HC[nx]as number[])[ny]!;
-    // 是否朝著 cycle 的下一個前進
-    const fwd=(nIdx-headIdx+cycleLen)%cycleLen;
-    const isNextOnCycle=(hcTarget!==null&&nx===hcTargetPos.x&&ny===hcTargetPos.y);
-    if(isNextOnCycle){
-      score+=150000; // 完全遵循 cycle → 最高分
-    }else if(fwd>0&&fwd<=5){
-      score+=100000-fwd*5000; // 在 cycle 上小幅前進 → 高分
-    }else if(fwd>5&&fwd<cycleLen/3){
-      score+=60000-fwd*100; // 較大前進（短程捷徑）
-    }else if(fwd>=cycleLen/3&&fwd<cycleLen*2/3){
-      // 大跳躍 → 可能是反向，需要非常安全
-      score+=20000;
-    }else{
-      // 反向移動 → 違反 cycle → 重罰
-      score-=80000;
-    }
-
-    // ── ② 保持頭尾順序（headIdx 必須領先 tailIdx） ──
-    const newHeadOnCycle=(nIdx-tailIdx+cycleLen)%cycleLen;
-    if(newHeadOnCycle<distOnCycle*0.1)score-=100000; // 頭太靠近尾巴
-
-    // ── ③ Flood Fill 空間 ──
-    score+=space*100;
-    if(space<totalEmpty)score-=300000; // articulation point
-    const nbrs=openNbrs(nx,ny,amObs);
-    score+=nbrs*3000;
-    if(nbrs<=1)score-=100000;
-
-    // ── ④ 追尾可達性 ──
-    const tailPath=aStar(nx,ny,tail.x,tail.y,NO_TAIL_OBS);
-    if(tailPath){
-      score+=80000;
-      score+=tailPath.pathLen*30;
-      const ratio=tailPath.pathLen/Math.max(1,space);
-      if(ratio>0.4)score+=50000; // 長路徑=好循環
-    }else{
-      score-=300000; // 走不到尾巴=死亡
-    }
-
-    // ── ⑤ 吃食物虛擬預判 ──
+    // ═══════════════════════════════════════════════════
+    // ① 虛擬蛇安全檢查 + 尾巴連通性（只有要吃食物時才跑）
+    // ═══════════════════════════════════════════════════
     if(stepEats){
       const foodPath=aStar(head.x,head.y,myFood.x,myFood.y,NO_TAIL_OBS);
       if(foodPath){
+        // 派出虛擬蛇：模擬吃完食物後身體還剩下哪些 segment
         const nonEat=Math.min(foodPath.pathLen-1,snake2.length-1);
         const newTail=snake2[snake2.length-1-nonEat]!;
         const afterObs=afterFoodObs(myFood.x,myFood.y,foodPath.pathLen);
         afterObs.delete(`${newTail.x},${newTail.y}`);
-        const safe=aStar(myFood.x,myFood.y,newTail.x,newTail.y,afterObs);
-        if(safe)score+=500000;
-        else score-=500000;
-
-        // ✨ 生存空間比率檢查（防止吃進身體包圍的死角）
-        const lenRatio=space/(snake2.length+1);  // 吃完後自由空間 / 新蛇長
-        if(lenRatio<1.5)score-=3000000;  // 空間比身體還小 → 必死
-        else if(lenRatio<2.5)score-=1000000;  // 空間嚴重不足
-        else if(lenRatio<4)score-=300000;  // 有點擠
+        // 檢查吃完後能不能連到尾巴（尾巴連通性）
+        if(aStar(myFood.x,myFood.y,newTail.x,newTail.y,afterObs)){
+          canEat=true; // ✅ 安全！虛擬蛇吃完還走得出去
+        }
       }
-    }else if(myFood&&!(inOpp&&myFood.x===-1)){
-      const toFood=aStar(nx,ny,myFood.x,myFood.y,NO_TAIL_OBS);
-      if(toFood)score+=8000;
     }
 
-    // ⑥ 對手場地追殺
-    if(inOpp){const c=aStar(nx,ny,snake[0]!.x,snake[0]!.y,NO_TAIL_OBS);if(c)score+=10000;}
-    // ⑦ 傳送門
-    if(myPortal&&!inOpp){const p=aStar(nx,ny,myPortal.x,myPortal.y,NO_TAIL_OBS);if(p)score+=5000;}
-    if(oppPortal&&inOpp){const p=aStar(nx,ny,oppPortal.x,oppPortal.y,NO_TAIL_OBS);if(p)score+=5000;}
-    // ⑧ 撿技能
-    if(myPU&&!hasSkill&&!(inOpp&&myPU.x===-1)){const p=aStar(nx,ny,myPU.x,myPU.y,NO_TAIL_OBS);if(p)score+=3000;}
-    // ⑨ 邊緣偏好
-    if(snake2.length>6){const ne=(nx<=2||ny<=2||nx>=GRID-3||ny>=GRID-3)?1:0;score+=ne*snake2.length*5;}
-    // ⑩ 方向穩定性（防止蛇長時上下亂砲）
-    if(d===lastDir)score+=60000;
-    // ⑪ 長蛇空間保留
-    if(snake2.length>80&&space<snake2.length*1.5)score-=500000;
-    if(snake2.length>120&&space<snake2.length*2)score-=800000;
-    // ⑫ 從失敗學習（以前同樣位置+方向死過 → 扣分）
+    // ═══════════════════════════════════════════════════
+    // ② 最長路徑苟活（Hamiltonian Cycle 嚴格遵循）
+    // ═══════════════════════════════════════════════════
+    // 從 (nx,ny) 能不能走到尾巴？
+    const canReachTail=aStar(nx,ny,tail.x,tail.y,canEat?TAIL_OBS:NO_TAIL_OBS);
+    if(!canReachTail)continue; // 走不到尾巴 → 死路一條，跳過
+
+    const nIdx=(HC[nx]as number[])[ny]!;
+    const fwd=(nIdx-headIdx+cycleLen)%cycleLen; // 在 HC 上往前跳了幾格
+
+    // ── (A) 安全吃食物：最高優先級 ──
+    if(canEat){
+      score+=1000000;
+      score+=(cycleLen-fwd)*5; // 越緊密遵循 HC 越好
+    }else{
+      // ── (B) 不吃食物：最長路徑 = 最小 fwd（緊貼 HC） ──
+      score+=(cycleLen-fwd)*80;
+      score+=Math.min(canReachTail.pathLen,500)*3;
+      // 連到尾巴路徑越長 = 迴轉空間越大
+      const sp=floodFill(nx,ny,afterMoveObs(nx,ny,false));
+      score+=sp*20;
+      if(sp<snake2.length*1.5)score-=500000;
+    }
+
+    // 學習系統（沿用）
     score-=getLearnPenalty(nIdx,d,snake2.length);
-    // ⑬ 從真人高手學習（真人常這樣走 → 加分）
     score+=getHumanBonus(nIdx,d,snake2.length);
 
     if(score>bestScore){bestScore=score;bestDir=d;}
   }
 
-  // ── 緊急模式：任何安全方向 ──
+  // ── 緊急模式：只要安全就往哪走 ──
   if(!bestDir){
     for(const d of ALL){
       if(d===OPP[dir2])continue;
