@@ -1283,116 +1283,85 @@ function duelAI() {
   let bestDirection: "UP" | "DOWN" | "LEFT" | "RIGHT" | null = null;
   let bestDirectionScore: number = -Infinity;
 
+  // ── 全域捷徑：A* 找最短食物路徑，虛擬蛇確認安全就記下 ──
+  let go: "UP"|"DOWN"|"LEFT"|"RIGHT"|null = null;
+  if (FOOD_EXISTS) {
+    const p2f = aStar(head.x, head.y, myFood!.x, myFood!.y, OBSTACLES_WITHOUT_TAIL);
+    if (p2f) {
+      const ne = Math.min(p2f.pathLen - 1, snake2.length - 1);
+      const vi = snake2.length - 1 - ne;
+      const vt = snake2[vi]!;
+      const ao = afterFoodObs(myFood!.x, myFood!.y, p2f.pathLen);
+      ao.delete(`${vt.x},${vt.y}`);
+      if (aStar(myFood!.x, myFood!.y, vt.x, vt.y, ao)) go = p2f.dir;
+    }
+  }
+
   // ─── 逐一評估四個可行方向 ─────────────────────────────────
-  for (const direction of ALL) {
-    // 禁止直接回頭
-    if (direction === OPP[dir2]) continue;
+  for (const d of ALL) {
+    if (d === OPP[dir2]) continue;
 
-    // 計算新頭座標
-    let nextHeadX: number = head.x + dv[direction]!.x;
-    let nextHeadY: number = head.y + dv[direction]!.y;
+    let nx = head.x + dv[d]!.x, ny = head.y + dv[d]!.y;
+    if (ghost) { nx = (nx+GRID)%GRID; ny = (ny+GRID)%GRID; }
+    else if (nx<0||ny<0||nx>=GRID||ny>=GRID) continue;
 
-    // Ghost 模式：穿牆環繞
-    if (ghost) {
-      nextHeadX = (nextHeadX + GRID) % GRID;
-      nextHeadY = (nextHeadY + GRID) % GRID;
-    } else if (nextHeadX < 0 || nextHeadY < 0 || nextHeadX >= GRID || nextHeadY >= GRID) {
-      continue; // 撞牆 → 跳過
-    }
+    const WILL_EAT = FOOD_EXISTS && nx === myFood!.x && ny === myFood!.y;
+    const colObs = buildObs(WILL_EAT);
+    if (colObs.has(`${nx},${ny}`)) continue;
 
-    // ─── 判斷這一步是否會吃到食物 ──────────────────────────
-    const WILL_EAT_FOOD: boolean = FOOD_EXISTS && nextHeadX === myFood!.x && nextHeadY === myFood!.y;
+    let score = 0;
 
-    // ─── 碰撞檢查：吃食物時尾巴保留（不 pop），沒吃則尾巴可通行 ──
-    const collisionObstacles: Set<string> = buildObs(WILL_EAT_FOOD);
-    if (collisionObstacles.has(`${nextHeadX},${nextHeadY}`)) continue;
+    // ═══ 全域捷徑獎勵：走 go 方向給超高優待 ═══
+    if (d === go) score += 2_000_000;
 
-    let currentScore: number = 0;
-    let pathToFoodFound: boolean = false;
-    let canReachTailAfterEating: boolean = false;
-
-    // ═══════════════════════════════════════════════════════════
-    //  Step 1 + 2 + 3：找食物 + 虛擬蛇推演 + 尾巴連通性檢查
-    // ═══════════════════════════════════════════════════════════
-    if (WILL_EAT_FOOD) {
-      // ── Step 1: Find Path to Food ──
-      const pathToFood = aStar(head.x, head.y, myFood!.x, myFood!.y, OBSTACLES_WITHOUT_TAIL);
-
-      if (pathToFood !== null) {
-        pathToFoodFound = true;
-
-        // ── Step 2: Virtual Snake Simulation ──
-        //  虛擬蛇：沿 pathToFood 走，每步頭進尾 pop（最後一步吃食物不 pop）
-        const nonEatingSteps: number = Math.min(pathToFood.pathLen - 1, snake2.length - 1);
-        const virtualSnakeTailIndex: number = snake2.length - 1 - nonEatingSteps;
-        const virtualTail: { x: number; y: number } = snake2[virtualSnakeTailIndex]!;
-
-        //  建構虛擬蛇吃完食物後的障礙物集合（身體保留 segment）
-        const obstaclesAfterEating: Set<string> = afterFoodObs(myFood!.x, myFood!.y, pathToFood.pathLen);
-        obstaclesAfterEating.delete(`${virtualTail.x},${virtualTail.y}`); // 新的尾巴位置可通行
-
-        // ── Step 3: Check Tail Connectivity ──
-        //  虛擬蛇的頭（食物位置）能否走到虛擬蛇的尾巴？
-        const connectivityCheck = aStar(myFood!.x, myFood!.y, virtualTail.x, virtualTail.y, obstaclesAfterEating);
-        canReachTailAfterEating = connectivityCheck !== null;
+    // ═══ 食物路徑安全檢查（WILL_EAT 時）══════
+    let canReachTailAfterEat = false;
+    if (WILL_EAT) {
+      const p2f = aStar(head.x, head.y, myFood!.x, myFood!.y, OBSTACLES_WITHOUT_TAIL);
+      if (p2f) {
+        const ne = Math.min(p2f.pathLen - 1, snake2.length - 1);
+        const vi = snake2.length - 1 - ne;
+        const vt = snake2[vi]!;
+        const ao = afterFoodObs(myFood!.x, myFood!.y, p2f.pathLen);
+        ao.delete(`${vt.x},${vt.y}`);
+        canReachTailAfterEat = aStar(myFood!.x, myFood!.y, vt.x, vt.y, ao) !== null;
       }
     }
 
-    // ═══════════════════════════════════════════════════════════
-    //  Step 4 — Survival Decision
-    // ═══════════════════════════════════════════════════════════
-    //  原則：所有移動都必須確保「能走回自己的尾巴」才安全
-    // ───────────────────────────────────────────────────────────
-
-    //  查詢移動到 (nextHeadX, nextHeadY) 後能否連到尾巴
-    const tailReachableAfterMove = aStar(
-      nextHeadX, nextHeadY,
-      tail.x, tail.y,
-      canReachTailAfterEating ? OBSTACLES_WITH_TAIL : OBSTACLES_WITHOUT_TAIL
-    );
-
-    if (tailReachableAfterMove === null) {
-      continue; // ── 關鍵防線：走不到尾巴 → 死路，跳過
+    // ═══ 尾巴連通性（go 方向已由虛擬蛇驗證，跳過）═══
+    let tr: {dir:"UP"|"DOWN"|"LEFT"|"RIGHT";pathLen:number}|null = null;
+    if (d !== go) {
+      tr = aStar(nx, ny, tail.x, tail.y, WILL_EAT ? OBSTACLES_WITH_TAIL : OBSTACLES_WITHOUT_TAIL);
+      if (!tr) continue; // ── 死路，跳過
     }
 
-    // ── 4-A：安全吃食物（最高優先級） ──
-    if (canReachTailAfterEating) {
-      currentScore += 1_000_000;
-
-      // 在 HC 上的前進距離越短（越貼近 cycle），路徑越長越安全
-      const newHeadCycleIndex: number = (HC[nextHeadX] as number[])[nextHeadY]!;
-      const forwardSteps: number = (newHeadCycleIndex - headIdx + CYCLE_LENGTH) % CYCLE_LENGTH;
-      currentScore += (CYCLE_LENGTH - forwardSteps) * 5;
-
-    // ── 4-B：不吃食物 → 追尾模式（最長路徑苟活） ──
-    } else {
-      //  盡量貼緊 Hamiltonian Cycle：forwardSteps 越小 = 路徑越長
-      const newHeadCycleIndex: number = (HC[nextHeadX] as number[])[nextHeadY]!;
-      const forwardSteps: number = (newHeadCycleIndex - headIdx + CYCLE_LENGTH) % CYCLE_LENGTH;
-      currentScore += (CYCLE_LENGTH - forwardSteps) * 80;
-
-      //  A* 到尾巴的路徑越長 = 迴轉空間越大
-      currentScore += Math.min(tailReachableAfterMove.pathLen, 500) * 3;
-
-      //  連續空格檢查：空間太小就扣分
-      const obstaclesAfterMove: Set<string> = afterMoveObs(nextHeadX, nextHeadY, false);
-      const availableSpace: number = floodFill(nextHeadX, nextHeadY, obstaclesAfterMove);
-      currentScore += availableSpace * 20;
-
-      if (availableSpace < snake2.length * 1.5) {
-        currentScore -= 500_000;
-      }
+    // ═══ 生存決策 ═══
+    if (canReachTailAfterEat) {
+      score += 1_000_000;
+      const ni = (HC[nx] as number[])[ny]!;
+      const fw = (ni - headIdx + CYCLE_LENGTH) % CYCLE_LENGTH;
+      score += (CYCLE_LENGTH - fw) * 5;
+    } else if (d !== go) {
+      // HC 追尾模式（最長路徑苟活）
+      const ni = (HC[nx] as number[])[ny]!;
+      const fw = (ni - headIdx + CYCLE_LENGTH) % CYCLE_LENGTH;
+      score += (CYCLE_LENGTH - fw) * 80;
+      score += Math.min(tr!.pathLen, 500) * 3;
+      const ao = afterMoveObs(nx, ny, false);
+      const sp = floodFill(nx, ny, ao);
+      score += sp * 20;
+      if (sp < snake2.length * 1.5) score -= 500_000;
     }
 
-    // ── 共通：學習系統加成 ──
-    const newHeadCycleIndex: number = (HC[nextHeadX] as number[])[nextHeadY]!;
-    currentScore -= getLearnPenalty(newHeadCycleIndex, direction, snake2.length);
-    currentScore += getHumanBonus(newHeadCycleIndex, direction, snake2.length);
+    // ═══ 學習系統加成 ═══
+    const ni = (HC[nx] as number[])[ny]!;
+    score -= getLearnPenalty(ni, d, snake2.length);
+    score += getHumanBonus(ni, d, snake2.length);
 
-    // ── 選出最佳方向 ──
-    if (currentScore > bestDirectionScore) {
-      bestDirectionScore = currentScore;
-      bestDirection = direction;
+    // ═══ 選出最佳方向 ═══
+    if (score > bestDirectionScore) {
+      bestDirectionScore = score;
+      bestDirection = d;
     }
   }
 
