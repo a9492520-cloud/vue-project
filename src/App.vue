@@ -1129,14 +1129,14 @@ function stepDuel() {
 function duelAI() {
   const head = snake2[0]!;
   const tail = snake2[snake2.length - 1]!;
-  const directionVectors: Record<string, { x: number; y: number }> = {
+  const directionVectors = {
     UP: { x: 0, y: -1 }, DOWN: { x: 0, y: 1 },
     LEFT: { x: -1, y: 0 }, RIGHT: { x: 1, y: 0 }
-  };
-  const oppositeDirection: Record<string, string> = {
+  } as const;
+  const oppositeDirection = {
     UP: "DOWN", DOWN: "UP", LEFT: "RIGHT", RIGHT: "LEFT"
-  };
-  const allDirections: ("UP" | "DOWN" | "LEFT" | "RIGHT")[] = ["UP", "DOWN", "LEFT", "RIGHT"];
+  } as const;
+  const allDirections = ["UP", "DOWN", "LEFT", "RIGHT"] as const;
 
   const ghostActive = !!activePUs2.find(p => p.type === "ghost") &&
     activePUs2.find(p => p.type === "ghost")!.steps > 1;
@@ -1223,7 +1223,8 @@ function duelAI() {
       //     Uses original segment positions (conservative approximation)
       const obstaclesAfterEating = new Set<string>();
       for (let i = 0; i < virtualTailIndex; i++) {
-        obstaclesAfterEating.add(`${snake2[i].x},${snake2[i].y}`);
+        const segment = snake2[i]!;
+        obstaclesAfterEating.add(`${segment.x},${segment.y}`);
       }
       // Virtual tail cell is walkable (will move when virtual snake continues)
       obstaclesAfterEating.delete(`${virtualTail.x},${virtualTail.y}`);
