@@ -597,7 +597,8 @@ function step() {
     } else { triggerDeath(); return; }
   }
 
-  if(snake.some(s=>s.x===x&&s.y===y)){
+  const willEat=x===food.x&&y===food.y;
+  if((willEat?snake:snake.slice(0,-1)).some(s=>s.x===x&&s.y===y)){
     if(shield){
       activePUs=activePUs.filter(p=>p.type!=="shield");
       burst(x*CELL+CELL/2,y*CELL+CELL/2,"#60a5fa",22);
@@ -866,11 +867,17 @@ function stepDuel() {
     if(!consumeShield(2)) dead2=true; else shieldBlocked2=true;
   }
 
-  // self collision
-  if(!dead1&&snake.some(s=>s.x===nx1&&s.y===ny1)){
+  // food (先算，自撞才知道尾巴會不會移開)
+  const myFood1=g1===1?food:food2;
+  const myFood2=g2===1?food:food2;
+  const eat1=nx1===myFood1.x&&ny1===myFood1.y;
+  const eat2=nx2===myFood2.x&&ny2===myFood2.y;
+
+  // self collision（沒吃食物→尾巴會移開，不算障礙）
+  if(!dead1&&(eat1?snake:snake.slice(0,-1)).some(s=>s.x===nx1&&s.y===ny1)){
     if(!consumeShield(1)) dead1=true;
   }
-  if(!dead2&&snake2.some(s=>s.x===nx2&&s.y===ny2)){
+  if(!dead2&&(eat2?snake2:snake2.slice(0,-1)).some(s=>s.x===nx2&&s.y===ny2)){
     if(!consumeShield(2)) dead2=true;
   }
 
@@ -950,11 +957,6 @@ function stepDuel() {
   }
 
   // ── Food ──
-  const myFood1=g1===1?food:food2;
-  const myFood2=g2===1?food:food2;
-  const eat1=nx1===myFood1.x&&ny1===myFood1.y;
-  const eat2=nx2===myFood2.x&&ny2===myFood2.y;
-
   if(eat1){score1++;burst((g1===1?0:DUEL_GW)+nx1*DUEL_CW+DUEL_CW/2,ny1*DUEL_CH+DUEL_CH/2,"#ff4060",10);spawnDuelFood(g1);}
   if(eat2){score2++;burst((g2===1?0:DUEL_GW)+nx2*DUEL_CW+DUEL_CW/2,ny2*DUEL_CH+DUEL_CH/2,"#c084fc",10);spawnDuelFood(g2);}
   if(!eat1&&!shieldBlocked1) snake.pop();
