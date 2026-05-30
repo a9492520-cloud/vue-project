@@ -207,6 +207,87 @@ async function selectMode(mode:"main"|"normal"|"tron"|"boss"|"stage"|"shop") {
   if(mode!=="main"){ await loadLB(mode); loadHist(mode); }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// ── AI 學習系統（從失敗教訓 + 真人高手學習）──
+// ═══════════════════════════════════════════════════════════════
+const AI_LEARN_KEY="ns-ai-learn-v2";
+const HUMAN_TRAJ_KEY="ns-human-traj";
+
+interface AILearnEntry{deaths:number;penalty:number;}
+let aiLearn:Record<string,AILearnEntry>={};
+let humanTraj:{headIdx:number;dir:string;snakeLen:number}[]=[];
+
+function loadAILearn(){
+  try{const raw=localStorage.getItem(AI_LEARN_KEY);if(raw)aiLearn=JSON.parse(raw);}catch{aiLearn={};}
+  fetchGlobalLearn(); // sync from server
+}
+function saveAILearn(){
+  try{localStorage.setItem(AI_LEARN_KEY,JSON.stringify(aiLearn));}catch{}
+}
+
+async function fetchGlobalLearn(){
+  try{
+    const {data}=await sb.from("ai_learning").select("data").limit(1).single();
+    if(data?.data)for(const[k,v]of Object.entries(data.data as Record<string,AILearnEntry>)){
+      if(!aiLearn[k]||v.penalty>aiLearn[k].penalty)aiLearn[k]=v;
+    }
+  }catch{}
+}
+async function syncAILearn(){
+  try{
+    const{data}=await sb.from("ai_learning").select("id").limit(1).maybeSingle();
+    if(data?.id)await sb.from("ai_learning").update({data:aiLearn}).eq("id",(data as any).id);
+    else await sb.from("ai_learning").insert({data:aiLearn});
+  }catch{}
+}
+let _syncTimer=0;
+function debounceSync(){clearTimeout(_syncTimer);_syncTimer=setTimeout(syncAILearn,3000)as any;}
+
+// AI 死亡學習：記錄 (HC位置, 方向) → penalty
+function recordAIDeath(headIdx:number,dir:string,snakeLen:number,space:number){
+  const key=`${headIdx}:${dir}`;
+  if(!aiLearn[key])aiLearn[key]={deaths:0,penalty:0};
+  aiLearn[key].deaths++;
+  aiLearn[key].penalty+=Math.max(1,300-space*(snakeLen>50?0.5:1));
+  saveAILearn();debounceSync();
+}
+
+// 查詢 penalty：這個位置+方向以前死過幾次
+function getLearnPenalty(headIdx:number,dir:string,snakeLen:number):number{
+  const e=aiLearn[`${headIdx}:${dir}`];if(!e)return 0;
+  const ls=snakeLen>80?2:snakeLen>50?1.5:1;
+  return Math.min(e.penalty*ls,200000);
+}
+// 查詢真人 bonus：這個位置+方向真人常走嗎
+function getHumanBonus(headIdx:number,dir:string,snakeLen:number):number{
+  const matches=humanTraj.filter(m=>m.headIdx===headIdx&&m.dir===dir&&Math.abs(m.snakeLen-snakeLen)<15);
+  return Math.min(matches.length*5000,100000);
+}
+
+// 真人軌跡學習
+function recordHumanMove(curHeadIdx:number,dir:string,snakeLen:number){
+  humanTraj.push({headIdx:curHeadIdx,dir,snakeLen});
+}
+function saveHumanTrajectory(){
+  if(score.value<30)return;
+  try{
+    const ex=JSON.parse(localStorage.getItem(HUMAN_TRAJ_KEY)||"[]");
+    ex.push({traj:humanTraj,score:score.value,date:Date.now(),mode:gameMode.value});
+    ex.sort((a:any,b:any)=>b.score-a.score);
+    if(ex.length>15)ex.length=15;
+    localStorage.setItem(HUMAN_TRAJ_KEY,JSON.stringify(ex));
+  }catch{}
+}
+function loadHumanTrajectories(){
+  try{
+    const raw=localStorage.getItem(HUMAN_TRAJ_KEY);
+    if(raw){const all=JSON.parse(raw);humanTraj=[];for(const s of all)if(s.score>=30)humanTraj.push(...s.traj);}
+  }catch{humanTraj=[];}
+}
+
+loadAILearn();
+loadHumanTrajectories();
+
 function recordFrame() {
   frames.push({
     snake:JSON.parse(JSON.stringify(snake)),
@@ -357,7 +438,7 @@ async function startGame(mode:"normal"|"tron"|"boss"|"stage", ai:boolean) {
   activePUs=[]; activePUs2=[]; fieldPU=null; fieldPU2=null; combo=0; level=1;
   heldPU.value=null;
   currentStep=0; lastFoodStep=0; levelFlash=0; shakeFrames=0;
-  isDying=false; comboText=null; paused.value=false;
+  isDying=false; comboText=null; paused.value=false; humanTraj=[];
   tronWinner.value=""; bossData=null; missiles=[]; bossKills.value=0;
   missileCooldown=0; pressedKeys.clear(); extraLifeUsed=false;
 
@@ -566,6 +647,11 @@ function step() {
   if(gameMode.value==="tron"){ stepDuel(); return; }
   if(isAI.value) aiStep();
   if(dirQueue.length) dir=dirQueue.shift()!;
+  // 記錄真人移動軌跡（供 AI 學習）
+  if(!isAI.value){
+    const hi=(HC[snake[0]!.x]as number[])[snake[0]!.y]!;
+    recordHumanMove(hi,dir,snake.length);
+  }
   currentStep++;
 
   if(fieldPU){fieldPU.life--;if(fieldPU.life<=0)fieldPU=null;}
@@ -908,6 +994,20 @@ function stepDuel() {
       if(!killedByP2) score1=Math.max(0,score1-1);
     }
     if(dead2){
+      // AI 死亡學習：記錄致命位置+方向
+      if(is2PAI.value&&h2){
+        const di=(HC[h2.x]as number[])[h2.y]!;
+        const obs2=new Set<string>();
+        for(const s of snake2)obs2.add(`${s.x},${s.y}`);
+        if(g1===g2)for(const s of snake)obs2.add(`${s.x},${s.y}`);
+        const q2:[number,number][]=[[nx2,ny2]];const vis2=new Set(obs2);vis2.add(`${nx2},${ny2}`);let sp2=0;
+        while(q2.length){const[ax,ay]=q2.shift()!;sp2++;for(const dd of["UP","DOWN","LEFT","RIGHT"] as const){
+          let bx=ax+dv[dd]!.x,by=ay+dv[dd]!.y;
+          if(ghost2){bx=(bx+GRID)%GRID;by=(by+GRID)%GRID;}else if(bx<0||by<0||bx>=GRID||by>=GRID)continue;
+          const bk=`${bx},${by}`;if(!vis2.has(bk)){vis2.add(bk);q2.push([bx,by]);}
+        }}
+        recordAIDeath(di,dir2,snake2.length,sp2);
+      }
       const killedByP1=g1===g2&&snake.some(s=>s.x===nx2&&s.y===ny2);
       lives2--;
       if(killedByP1){lives1=Math.min(3,lives1+1);score1++;}
@@ -1277,6 +1377,10 @@ function duelAI() {
     // ⑪ 長蛇空間保留
     if(snake2.length>80&&space<snake2.length*1.5)score-=500000;
     if(snake2.length>120&&space<snake2.length*2)score-=800000;
+    // ⑫ 從失敗學習（以前同樣位置+方向死過 → 扣分）
+    score-=getLearnPenalty(nIdx,d,snake2.length);
+    // ⑬ 從真人高手學習（真人常這樣走 → 加分）
+    score+=getHumanBonus(nIdx,d,snake2.length);
 
     if(score>bestScore){bestScore=score;bestDir=d;}
   }
@@ -1431,6 +1535,8 @@ function gameOver() {
   history.value.unshift({label:name||"匿名",score:finalScore,frames:JSON.parse(JSON.stringify(frames)),mode});
   history.value=history.value.slice(0,10);
   if(mode!=="tron") saveHist(mode);
+  // 儲存真人高手軌跡（供 AI 學習）
+  if(!isAI.value&&mode!=="tron"&&finalScore>=30) saveHumanTrajectory();
 
   paused.value=false;
   state.value="gameover";
