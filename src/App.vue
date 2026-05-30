@@ -1136,10 +1136,11 @@ function duelAI() {
   const N=GRID*GRID;
 
   const ghost=!!activePUs2.find(p=>p.type==="ghost")&&activePUs2.find(p=>p.type==="ghost")!.steps>1;
+  const io=inOpponentGrid2;
   const sg=getCurrentGrid(1)===getCurrentGrid(2);
-  const myTraps=inOpp?traps1:traps2;
-  const mf=inOpp?food:food2;
-  const fe=!!mf&&!(inOpp&&mf.x===-1);
+  const myTraps=io?traps1:traps2;
+  const mf=io?food:food2;
+  const fe=!!mf&&!(io&&mf.x===-1);
 
   // ── obstacles (tail excluded for non-eating moves) ──
   function o(incTail:boolean):Set<string>{
